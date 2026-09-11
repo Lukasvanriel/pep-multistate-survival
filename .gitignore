@@ -4,3 +4,12 @@ data/raw/*
 .Rhistory
 .RData
 .Rproj.user/
+
+# generated covariate/processed data (reproducible from raw + scripts)
+data/covariates/
+data/processed/
+data-output/_r_test_tmp/
+
+# OS / editor junk
+.DS_Store
+**/.DS_Store
