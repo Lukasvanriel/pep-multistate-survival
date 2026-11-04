@@ -65,7 +65,8 @@ report_fits(s2$tidy, s2$theta, s2$n_events, "Stage 2")
 cat(sprintf("  P1: %d of %d plots without a usable candidate -> entry W_j/2 (marked)\n", sum(s2$p1$fallback), nrow(s2$p1)))
 cat(sprintf("  P2: %d exits, %d by midpoint (dropped / not-ok transition)\n", s2$p2_event, s2$p2_midpoint))
 fb <- cbind(inp$p1[, .(id_pe, W_j, first_state)], s2$p1[, .(n_cand, fallback)])[fallback == TRUE]
-fwrite(fb, file.path(OUT_DIR, "p1_fallback_plots_stage2.csv")); print(fb[, .N, by = first_state][order(-N)])
+fwrite(fb, file.path(OUT_DIR, "p1_fallback_plots_stage2.csv"))
+cat("  P1 fallbacks by first state (Stage 2):\n"); print(p1_fallback_by_state(s2$p1, inp))
 
 # first time only: look at one posterior sample's structure before trusting the name matching
 k_ok <- which(vapply(s2$models, function(m) is.null(m$error), logical(1)))[1]
@@ -82,6 +83,7 @@ if (!file.exists(meta_path)) saveRDS(list(time = Sys.time(), SEED = SEED, M_MI =
 
 # ---- MI loop (resumable: finished m are skipped) -------------------------------
 raw_path  <- file.path(OUT_DIR, sprintf("mi_raw_%s.csv", RUN_TAG)); diag_path <- file.path(OUT_DIR, sprintf("mi_diag_%s.csv", RUN_TAG)); err_path <- file.path(OUT_DIR, sprintf("mi_errors_%s.log", RUN_TAG))
+state_path <- file.path(OUT_DIR, sprintf("p1_fallback_by_state_%s.csv", RUN_TAG))
 done <- if (file.exists(diag_path)) fread(diag_path)$m else integer(0)
 todo <- setdiff(seq_len(M_MI), done)
 cat(sprintf("MI loop: %d done, %d to do (%d workers)\n", length(done), length(todo), N_WORKERS))
@@ -98,6 +100,9 @@ for (batch in split(todo, ceiling(seq_along(todo) / N_WORKERS))) {
     saveRDS(r$extras, file.path(OUT_DIR, sprintf("extras_%s_m%02d.rds", RUN_TAG, r$diag$m)))
     fwrite(r$res,  raw_path,  append = file.exists(raw_path))
     fwrite(r$diag, diag_path, append = file.exists(diag_path))
+    fwrite(r$p1_state, state_path, append = file.exists(state_path))     # WP4: P1 fallbacks by first state, one block per imputation
+    cat(sprintf("  m=%d: P1 fallbacks %d of %d plots; by first state (n_fallback / n_plots):", r$diag$m, sum(r$p1_state$n_fallback), sum(r$p1_state$n_plots)),
+        paste(sprintf("%s %d/%d", r$p1_state$first_state, r$p1_state$n_fallback, r$p1_state$n_plots), collapse = "; "), "\n")
   }
   cat(sprintf("  batch up to m=%d done (%.0f s)\n", max(batch), proc.time()["elapsed"] - t0))
 }

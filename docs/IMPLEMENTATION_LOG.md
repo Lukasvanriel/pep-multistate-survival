@@ -198,3 +198,44 @@ Template:
 - Plan error (plan is read-only, not edited): the B1 check string `run_meta$inla_args$control.family$variant == 0` is NULL in practice; `.args$control.family` is a list of one, so the correct path is `control.family[[1]]$variant`. The checklist (B1 note, WP5 run_meta command) and `wp3_B4_check.R` already use it.
 - B4 unit test ticked (Mac run 2026-11-04, ALL CHECKS PASSED, variant 0 confirmed). B1 and B2 stay unticked until the WP5 run_meta check; B5 until the first 07 run.
 - WP3 review ticked.
+
+## WP4 -- C1, C5 (2026-11-04) -- CODE DONE, MAC CHECKS PENDING
+- Commit: "WP4: C1, C5" (hash: see `git log`; recorded in a following docs commit). Author Lukas Van Riel as in the earlier commits.
+- User decisions before the work (2026-11-04): (1) yearly grid from the first onset, last piece cut at W_j with the midpoint of the shortened piece; (2) EXTRA breakpoint at the exact
+  onset of a later type (piece splits in two, each with TSD at its own midpoint) -- DEVIATION from "yearly pieces" in the plan (C1.5); (3) time since entry stays the clock when lambda
+  changes; (4) the "same candidates" check = new code vs the WP3 `p1_candidates` fed the same base-row lambda; (5) the user's own toy for C5; (6) the real-data shift as a test script run in WP5
+  (checklist item added under WP5); (7) fv_* columns and defaults as proposed. (The message numbered the clock answer "2. A" and the toy under "3"; read as above.)
+- Files / functions changed:
+  - `R/04_prepare_inla.R`: `plot_info` gets `fv_gdd_3, fv_cmi_gs, fv_soil_pc1, fv_fire, fv_harv, fv_pest, fv_tsd_fire_y, fv_tsd_pest_y, fv_tsd_harv_y` (raw, first row of `dt2`; TSD per TSD_SOURCE, 0 where the flag is 0).
+    New `stopifnot` on these columns (A1.5 on what P1 reads: no NA; flags 0/1 and 0/1/2; TSD >= 0 and 0 where unflagged); prints NA counts and flagged / unflagged plot counts. The WP1 check on `dt2` stays.
+  - `R/covariate_spec.R`: new `tsd_fun(tsd_form)` (the TSD transform of `add_model_covariates`, now shared with P1); no change of results.
+  - `R/05a_fit_funs.R`: `prepare_fit_inputs` also returns `X1` (first-visit model row), `X0` (same without disturbance), `on` (onset = W_j - first-visit TSD per type, harvest level), `iv_first`, `iv_n`; stops with a clear message if
+    `plot_info.rds` has no fv_* columns (rerun 04) or the intervals of a plot are not contiguous from W_j. `inp$X` (end-visit values of interval 1) kept as LEGACY, no longer read by P1.
+    New: `p1_pieces` (pieces + lambda per piece; observed intervals after W_j up to the end of the weighting bracket), `p1_next_exit` (exact piece-by-piece inversion; earliest competing exit), `p1_candidates_pw`,
+    `p1_H_between`, `log1mexp`, `p1_weights_pw` (C5: [S(lo - e) - S(hi - e)] / S(W_j - e) in log space = exp(-H(W,lo)) (1 - exp(-H(lo,hi))); no change: exp(-H(W,hi))), `p1_fallback_by_state`.
+    `p1_entries` now uses them (Stage 2 mean mode and the imputation loop). The WP3 `p1_candidates` / `p1_weights` are kept unchanged as the reference of the identity test. `run_one_imputation` returns `p1_state`.
+  - `R/05_fit_inla.R`, `R/07_redraw.R`: P1 fallbacks by first state printed (Stage 2 table; one line per imputation) and appended to `p1_fallback_by_state_<tag>.csv` / `p1_fallback_by_state_redraw_<tag>.csv` (first_state, n_plots, n_fallback, share, m).
+  - New tests: `R/tests/wp4_C1_check.R` (synthetic tables through the real `prepare_fit_inputs`; `real` argument for the real tables), `R/tests/wp4_C5_toy.R`, `R/tests/wp4_C5_shift.R` (WP5).
+- Checks run (cloud, R 4.3.3, data.table; no INLA, no real data):
+  - `Rscript R/tests/wp4_C1_check.R` -> ALL CHECKS PASSED: (1) X1 = scaled first-visit values, X0 without disturbance, onset = W_j - TSD, 40 plots; (2) pieces: plot with onsets 25.4 and 27.5 gets breakpoints 25.4, 26.4, ..., 39.4, 40 plus 27.5, last piece [39.4, 40] with midpoint 39.7; onset -5 -> grid from 0 and TSD 5.5 at the first midpoint; lambda per piece equals an independent build;
+    (3) identity: 26 plots, max difference 4.3e-14; (4) KS: see checklist (p = 0.013 is the lowest of four; 1e6-draw rerun p = 0.17 / 0.63 / 0.06); (5) weights equal an independent numerical integral (max 1.4e-16); (6) `p1_entries` reproducible with the seed; no-ok-transition case; (7) `c5_shift` runs.
+  - `Rscript R/tests/wp4_C5_toy.R` -> exact 30.52 | current 36.59 | corrected 30.56 | production functions: current 36.52, corrected 30.43 (-1.3 SE). ALL CHECKS PASSED.
+  - `Rscript R/tests/wp3_B4_check.R` (mock) still passes (max |S0 - S1| 4.4e-16).
+  - The new 04 block was run on a synthetic `dt2` (flags set / unset, nonzero TSD where unflagged -> 0; an NA first-visit gdd_3 stops with "A1.5").
+  - Two diagnosed bugs of my own on the way (fixed before the run above): rounding of W_j to 9 decimals could round it up past W_j and drop the last breakpoint (non-integer W_j); a stray name on the breakpoint vector.
+- Checks the user must run on the Mac (project root, in this order):
+  1. `Rscript R/04_prepare_inla.R`  (writes the fv_* columns; expect NA counts 0 in the new "plot_info first-visit columns" line, 11,286 plots; compare "none flagged" with the plan's 6,330)
+  2. `Rscript R/tests/wp4_C1_check.R real`  (synthetic part again, then: real onsets = W_j - TSD, X1 vs scaled first-visit values for 300 plots, pieces contiguous from 0 to the end of the weighting bracket for 300 flagged plots; prints the piece counts and the number of onsets <= 0)
+  3. optional, `Rscript R/tests/04c_check_rows.R` (04 changes only plot_info; 04c should still pass)
+  4. in WP5, after the first full imputation: `Rscript R/tests/wp4_C5_shift.R 1 1000` (C5 real-data shift)
+- Deviations from the plan (each asked and approved by the user 2026-11-04):
+  - C1.5: extra breakpoint at the exact onset of every type that starts after the first onset (the plan has only yearly pieces after the first onset).
+  - C1 identity check redefined (the plan's wording cannot hold because C1.2 moves the climate/soil to the first visit).
+  - C5 toy: the plan's numbers (27.3 / 37.3 / 27.4) came from a version that cannot be found; the user's toy gives 30.52 / 36.59 / 30.56. Same pattern (current later by about 6 y, corrected = exact), different numbers.
+  - C5 real-data shift moved to a script run in WP5 (the main-run theta has the old terms and cannot be evaluated with the new X). It compares old and corrected weights on the SAME piecewise hazards and candidates, so it isolates the C5 effect.
+- Open issues / things to watch:
+  - NOT verified: the real 04 output, the real `prepare_fit_inputs`, the P1 fallbacks by first state, P1 run time. Cloud timing on the synthetic plots with a random theta: 0.011 s per unflagged and 0.021 s per flagged plot (M = 200, one core, W_j median 64): not comparable with the plan's 1.19 min per imputation on the Mac; the real figure comes with the WP5 full imputation.
+  - Pieces after W_j use each observed interval's end-visit row, so the hazard jumps at W_j from the first-visit climate to the interval-1 end-visit climate (as decided in the plan).
+  - A flagged plot with TSD 0 (onset = W_j) has its flag off for the whole of P1's history (C1.3); its P1 row is X0.
+  - `tests/23_p1_onset_bench.R` (benchmark prototype) and older diagnostics that read `inp$X` were not touched.
+  - A plot starting in regen with no change observed keeps entry 0 even when no transition is ok (same as the WP3 code).

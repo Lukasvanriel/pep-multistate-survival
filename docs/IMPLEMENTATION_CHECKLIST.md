@@ -53,13 +53,14 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [x] B7 recount_events() called in run_stage1() after build_rows()  -- *plan grep finds only config.R and the fit function; wiring tested with stubs; skipped (printed) when SUBSAMPLE_N is set, so the first real run is the full Stage 1*
 
 ## WP4 -- C1, C5 (P1; 04 plot_info first-visit values)   Commit: ______   Review: [ ]
-- [ ] C1.1 04 writes first-visit covariates to plot_info (+ A1.5 NA check if not done in WP1)
-- [ ] C1.2-C1.5 P1 base row = first visit; flags switch on at onset = W_j - first-visit TSD; yearly pieces after the first onset, TSD at mid-year; exact piecewise draw
-- [ ] C1.6 + C5 weights: same piecewise hazards to the first visit, observed-interval covariates after it, divided by S(W_j - e)
-- [ ] C1 unit test: 100,000 piecewise draws match the exact piecewise survival (KS p > 0.01)
-- [ ] C1 check: unflagged plots give the same candidates as the current P1 for the same seed
-- [ ] C5 check: toy example reproduces the exact posterior mean
-- [ ] P1 fallbacks printed per imputation and by first state
+- [ ] C1.1 04 writes first-visit covariates to plot_info (+ A1.5 NA check if not done in WP1)  -- *code done (`fv_*` columns, NA/coding stopifnot on plot_info; block tested on a synthetic dt2: structural zero TSD, NA stops); the check on the real 04 output is the Mac run below*
+- [ ] C1.2-C1.5 P1 base row = first visit; flags switch on at onset = W_j - first-visit TSD; yearly pieces after the first onset, TSD at mid-year; exact piecewise draw  -- *code done (`p1_pieces`, `p1_next_exit`, `p1_candidates_pw`; extra breakpoint at the exact onset of a later type = user decision, see log); synthetic-table checks 1-2 passed; the sample-of-real-plots check is the Mac run below*
+- [ ] C1.6 + C5 weights: same piecewise hazards to the first visit, observed-interval covariates after it, divided by S(W_j - e)  -- *code done (`p1_weights_pw`, log space); equals an independent numerical integral (max difference 1.4e-16, 5 plots); the real-data shift is the WP5 item below*
+- [x] C1 unit test: 100,000 piecewise draws match the exact piecewise survival (KS p > 0.01)  -- *`R/tests/wp4_C1_check.R` check 4: 4 cases (2 flagged plots with an onset <= 0 / two onsets, entries 0 and mid-piece): KS p = 0.553, 0.976, 0.487, 0.013; exit-type chi-square p = 0.186-0.969. The p = 0.013 passes but is the lowest of 4: rerun with 1e6 draws (3 seeds) D <= 0.0013, p = 0.17 / 0.63 / 0.06, so no systematic deviation*
+- [x] C1 check: unflagged plots give the same candidates as the current P1 for the same seed  -- *user decision 2026-11-04 (A): reference = the WP3 `p1_candidates` fed the same base-row lambda (the climate/soil of the first visit, C1.2, so HEAD's interval-1 covariates cannot give identical candidates); 26 synthetic plots without an onset before W_j (unflagged, and flagged with onset = W_j): same seed, max abs difference 4.3e-14*
+- [x] C5 check: toy example reproduces the exact posterior mean  -- *`R/tests/wp4_C5_toy.R` (user's toy, 2026-11-04): exact 30.52 | current 36.59 | corrected 30.56 (0.9 SE); production functions on the same toy: current 36.52 (99 SE away), corrected 30.43 (-1.3 SE). The plan's 27.3 / 37.3 / 27.4 came from a version that cannot be found*
+- [ ] P1 fallbacks printed per imputation and by first state  -- *code done (`p1_fallback_by_state`; printed in 05 Stage 2 and in the 05/07 loops, `p1_fallback_by_state[_redraw]_<tag>.csv`); first real output with the WP5 full imputation*
+- [ ] User ran on the Mac: `Rscript R/04_prepare_inla.R`, then `Rscript R/tests/wp4_C1_check.R real`  -- *(added in WP4) expect the 04 NA counts 0 and 11,286 plots; the real section: onsets = W_j - TSD, X1 = scaled first-visit values (300 plots), pieces contiguous 0 -> end of the weighting bracket (300 flagged plots)*
 
 ## WP5 -- C2, C3 (P2; run_stage1) + first test runs   Commit: ______   Review: [ ]
 - [ ] C2 exit rule (D_heavy) in Stage 1, Stage 2 and every imputation; exit_source recorded in extras$p2
@@ -69,6 +70,7 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] B1/B2/B5 run-time checks from the first 05/07 runs
   - run_meta (smoke test writes to `fits_subsample`; the full run to `fits`): `Rscript -e 'm <- readRDS("data-output/final/fits_subsample/run_meta_final.rds"); print(m$inla_args$control.family[[1]]$variant); str(m$inla_args$control.fixed); print(unlist(m[c("WEIBULL_VARIANT","COEF_PRIOR_SD","TSD_FORM","MIN_EVENTS","XREGEN_EXIT_RULE")]))'`  -- expect variant 0; control.fixed mean 0, prec 0.04, mean.intercept 0, prec.intercept 0; switches 0 / 5 / log1p / 15 / TRUE (B1, B2)
   - 07 reference table (after the full 05 run): `Rscript R/07_redraw.R 2>&1 | tee data-output/final/redraw_console.log`, then `grep -n -A95 "Screen reference table" data-output/final/redraw_console.log`  -- expect all 90 kept transitions (k, icpt_ref, icpt_sd_ref, n_ref, label) printed before the first "Batch m=" line (B5)
+- [ ] User ran on the Mac: `Rscript R/tests/wp4_C5_shift.R 1 1000` after the first full imputation (C5 real-data shift, from WP4)  -- pass = corrected entries earlier on average (mean old - corrected > 0); size vs the plan's 2.9-3.8 y for information only
 - [ ] User ran on the Mac: one full imputation; checks: 1,537 rule exits; B6 columns filled; P1 fallbacks by first state vs main run's 124-196 (watch the 681 unharvested sugar-maple-first plots)
 
 ## WP6 -- full run (user)   Run tag: ______

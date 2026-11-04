@@ -142,8 +142,28 @@ cat("  gap between visits (years):\n"); print(summary(iv$t_end - iv$t_start))
 cat("  plots with no interval (single visit):",
     sum(!wj[include == TRUE, id_pe] %in% iv$id_pe), "\n")
 
+# WP4 / C1.1: first-visit covariates of every plot, read by P1 (R/05a_fit_funs.R, prepare_fit_inputs). Raw values (the interval scaling is applied
+# there). TSD in YEARS per TSD_SOURCE, 0 where the flag is 0 (same rule as the columns of `iv`). The flags and TSD at the first visit are
+# never an end visit of an interval, so they are not in `iv`.
 plot_info <- dt2[, .(W_j = W_j[1L], first_state = state[1L], first_year = year[1L],
-                     n_visits = .N, n_changes = sum(state[-.N] != state[-1L])), by = id_pe]
+                     n_visits = .N, n_changes = sum(state[-.N] != state[-1L]),
+                     fv_gdd_3 = gdd_3[1L], fv_cmi_gs = cmi_gs[1L], fv_soil_pc1 = soil_pc1[1L],
+                     fv_fire = fire[1L], fv_harv = harv[1L], fv_pest = pest[1L],
+                     fv_tsd_fire_y = fifelse(fire[1L] == 1L, tsd_fire_y[1L], 0),
+                     fv_tsd_pest_y = fifelse(pest[1L] == 1L, tsd_pest_y[1L], 0),
+                     fv_tsd_harv_y = fifelse(harv[1L] >  0L, tsd_harv_y[1L], 0)), by = id_pe]
+# A1.5 on what P1 reads (the WP1 check above runs on dt2; this one on the written columns) + coding checks
+fvc <- grep("^fv_", names(plot_info), value = TRUE)
+cat(sprintf("\nplot_info first-visit columns: NA counts %s\n", paste(sprintf("%s=%d", fvc, vapply(fvc, function(v) sum(is.na(plot_info[[v]])), 0L)), collapse = " ")))
+stopifnot("A1.5: NA in a first-visit column of plot_info" = !anyNA(plot_info[, ..fvc]),
+          "plot_info: fv_fire / fv_pest must be 0/1 and fv_harv 0/1/2" =
+            all(plot_info$fv_fire %in% 0:1, plot_info$fv_pest %in% 0:1, plot_info$fv_harv %in% 0:2),
+          "plot_info: negative first-visit TSD" = all(plot_info[, .(fv_tsd_fire_y, fv_tsd_pest_y, fv_tsd_harv_y)] >= 0),
+          "plot_info: first-visit TSD must be 0 where the flag is 0" =
+            all(plot_info[fv_fire == 0L, fv_tsd_fire_y] == 0, plot_info[fv_pest == 0L, fv_tsd_pest_y] == 0, plot_info[fv_harv == 0L, fv_tsd_harv_y] == 0))
+cat(sprintf("plot_info: %d plots; flagged at the first visit: fire %d, pest %d, harvest light %d / heavy %d; any flag %d, none %d (plan, main build: 6,330 with none)\n",
+            nrow(plot_info), sum(plot_info$fv_fire == 1L), sum(plot_info$fv_pest == 1L), sum(plot_info$fv_harv == 1L), sum(plot_info$fv_harv == 2L),
+            plot_info[, sum(fv_fire == 1L | fv_pest == 1L | fv_harv > 0L)], plot_info[, sum(fv_fire == 0L & fv_pest == 0L & fv_harv == 0L)]))
 saveRDS(iv, file.path(TABLE_DIR, "visit_intervals.rds"))
 saveRDS(plot_info, file.path(TABLE_DIR, "plot_info.rds"))
 

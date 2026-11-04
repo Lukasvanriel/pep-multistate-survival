@@ -90,10 +90,31 @@ prepare_fit_inputs <- function(proc_dir, subsample_n = NULL, seed = 1L) {
   p1[, `:=`(last_end = lastv$last_end[match(id_pe, lastv$id_pe)], lo = chg$lo[match(id_pe, chg$id_pe)], hi = chg$hi[match(id_pe, chg$id_pe)])]
   p1[, `:=`(obs_lower = lo, obs_upper = fifelse(is.na(lo), last_end, hi), s_idx = match(first_state, states))]
   stopifnot(identical(p1$id_pe, f1$id_pe), !anyNA(p1$s_idx))
-  X <- as.matrix(f1[, ..terms])
+  X <- as.matrix(f1[, ..terms])    # LEGACY (end-visit values of interval 1): P1 no longer reads it since WP4 (C1); kept for the older diagnostics
+
+  # WP4 / C1: first-visit covariates of 04 (plot_info fv_* columns), scaled with the interval scaling.
+  #   X1 = first-visit values as observed (flags and TSD at the first visit); X0 = the same with every disturbance flag and TSD set to 0
+  #   (climate, soil and GDD unchanged); on = onset of each flagged type on P1's clock = W_j - first-visit TSD (C1.3). harv_lvl = 1 light / 2 heavy.
+  fvn <- c("fv_gdd_3", "fv_cmi_gs", "fv_soil_pc1", "fv_fire", "fv_harv", "fv_pest", "fv_tsd_fire_y", "fv_tsd_pest_y", "fv_tsd_harv_y")
+  if (!all(fvn %in% names(pinfo))) stop("plot_info.rds has no first-visit columns (", paste(setdiff(fvn, names(pinfo)), collapse = ", "), "): rerun R/04_prepare_inla.R (WP4)")
+  fv <- pinfo[match(p1$id_pe, id_pe)]
+  stopifnot("A1.5: NA in a first-visit column of plot_info" = !anyNA(fv[, ..fvn]))
+  d1 <- data.table(gdd_3 = fv$fv_gdd_3, cmi_gs = fv$fv_cmi_gs, soil_pc1 = fv$fv_soil_pc1, fire = fv$fv_fire, harv = fv$fv_harv, pest = fv$fv_pest,
+                   tsd_fire_y = fv$fv_tsd_fire_y, tsd_pest_y = fv$fv_tsd_pest_y, tsd_harv_y = fv$fv_tsd_harv_y)
+  X1 <- as.matrix(add_model_covariates(d1, scaling)[, ..terms])
+  d0 <- copy(d1); d0[, `:=`(fire = 0L, harv = 0L, pest = 0L, tsd_fire_y = 0, tsd_pest_y = 0, tsd_harv_y = 0)]
+  X0 <- as.matrix(add_model_covariates(d0, scaling)[, ..terms])
+  on <- data.table(fire = fifelse(fv$fv_fire == 1L, p1$W_j - fv$fv_tsd_fire_y, NA_real_), pest = fifelse(fv$fv_pest == 1L, p1$W_j - fv$fv_tsd_pest_y, NA_real_),
+                   harv = fifelse(fv$fv_harv > 0L, p1$W_j - fv$fv_tsd_harv_y, NA_real_), harv_lvl = fv$fv_harv)
+  # observed intervals of each plot are contiguous rows of iv, the first starting at W_j (the weights run piecewise over them, C1.6)
+  iv_first <- match(p1$id_pe, iv$id_pe); iv_n <- iv[, .N, by = id_pe]$N[match(p1$id_pe, unique(iv$id_pe))]
+  same <- iv$id_pe[-1L] == iv$id_pe[-nrow(iv)]
+  stopifnot("P1: intervals of a plot are not contiguous rows of iv" = identical(iv$id_pe[iv_first + iv_n - 1L], p1$id_pe),
+            "P1: first interval does not start at W_j" = all(abs(iv$t_start[iv_first] - p1$W_j) < 1e-9),
+            "P1: intervals of a plot are not contiguous in time" = all(abs(iv$t_start[-1L] - iv$t_end[-nrow(iv)])[same] < 1e-9))
 
   list(iv = iv, tr = tr, td = td, subsampled = !is.null(subsample_n), states = states, mask = mask, terms = terms, rhs = rhs_formulas(mask),
-       kmat = kmat, out_k = out_k, p1 = p1, X = X, Xiv = as.matrix(iv[, ..terms]),
+       kmat = kmat, out_k = out_k, p1 = p1, X = X, X1 = X1, X0 = X0, on = on, iv_first = iv_first, iv_n = iv_n, Xiv = as.matrix(iv[, ..terms]),
        start_idx = match("regen", states), scaling = scaling,
        keep_cols = c("fire", "harv", "pest", "year_end", terms))
 }
@@ -210,17 +231,132 @@ p1_weights <- function(cand, s_j, lo, hi, alpha, lam, out_k) {
   w / sum(w)
 }
 
+# ------------------------------------------------------------------------------
+# WP4 (C1, C5): P1 with covariates that change over P1's history, and the corrected weights.
+# The functions above (p1_candidates, p1_weights) are the WP3 versions with ONE lambda per plot; they are kept as the reference for the identity
+# test (R/tests/wp4_C1_check.R) and are no longer used by p1_entries().
+#
+# Pieces (absolute P1 clock, years; time 0 = stand origin, W_j = first visit):
+#   * before the first onset: one piece with the base covariates (X0: first-visit climate/soil, no disturbance) = the one-formula draw of before;
+#   * from the first onset: yearly pieces (grid from the first onset; onset <= 0: grid from 0) up to W_j, plus an EXTRA breakpoint at the exact
+#     onset of every other type (decided 2026-11-04, deviation from "yearly pieces": the piece splits in two, each with TSD at its own midpoint);
+#   * a type is on in a piece when the piece midpoint >= its onset; its TSD is the piece midpoint minus the onset, through tsd_fun(TSD_FORM);
+#   * after W_j: the observed intervals up to the end of the weighting bracket, each with its own end-visit row (as in the fitted rows).
+# Hazard of exit k in a piece: lambda_k,piece^alpha_k * alpha_k * u^(alpha_k - 1) with u = time since entry (proportional hazards, entry clock),
+# so H(e; a, b) = sum over pieces lambda^alpha * (u1^alpha - u0^alpha).
+# ------------------------------------------------------------------------------
+P1_FLAG_COLS <- list(fire = c(flag = "fire_f", gdd = "gdd_x_fire", tsd = "tsd_fire"),
+                     pest = c(flag = "pest_f", gdd = "gdd_x_pest", tsd = "tsd_pest"),
+                     harv_light = c(flag = "harv_light", gdd = "gdd_x_harv_light", tsd = "tsd_harv_light"),
+                     harv_heavy = c(flag = "harv_heavy", gdd = "gdd_x_harv_heavy", tsd = "tsd_harv_heavy"))
+
+# Pieces of plot j. L0, Liv = lambda matrices of the base rows (X0) and of the observed intervals (Xiv). Returns p0, p1, L (pieces x K), LA = L^alpha
+# (0 for transitions that are not ok), npre = number of pieces before W_j (pieces 1..npre end at W_j; the rest are observed intervals).
+p1_pieces <- function(j, theta, inp, L0, Liv, f_tsd = tsd_fun()) {
+  W <- inp$p1$W_j[j]
+  on <- c(fire = inp$on$fire[j], pest = inp$on$pest[j], harv = inp$on$harv[j])
+  lv <- c(fire = "fire", pest = "pest", harv = if (isTRUE(inp$on$harv_lvl[j] == 2L)) "harv_heavy" else "harv_light")
+  on <- on[!is.na(on)]
+  K <- ncol(L0)
+  if (W > 0) {
+    first_on <- if (length(on)) max(0, min(on)) else NA_real_
+    grid <- if (is.na(first_on) || first_on >= W) numeric(0) else seq(first_on, W, by = 1)
+    brk <- sort(c(0, grid, unname(on[on > 0 & on < W]))); brk <- brk[brk < W - 1e-9]
+    brk <- c(brk[c(TRUE, diff(brk) > 1e-9)], W)         # drop breakpoints closer than 1e-9 y; W itself stays exact
+    p0 <- brk[-length(brk)]; p1e <- brk[-1L]
+  } else { p0 <- numeric(0); p1e <- numeric(0) }
+  npre <- length(p0)
+  Lp <- matrix(L0[j, ], npre, K, byrow = TRUE)
+  if (npre && length(on)) {
+    mid <- (p0 + p1e) / 2
+    Xp <- matrix(inp$X0[j, ], npre, length(inp$terms), byrow = TRUE, dimnames = list(NULL, inp$terms))
+    zg <- inp$X0[j, "z_gdd_3"]; any_on <- rep(FALSE, npre)
+    for (ty in names(on)) {
+      a <- mid >= on[[ty]] - 1e-9; if (!any(a)) next
+      cc <- P1_FLAG_COLS[[lv[[ty]]]]
+      Xp[a, cc[["flag"]]] <- 1; Xp[a, cc[["gdd"]]] <- zg; Xp[a, cc[["tsd"]]] <- f_tsd(mid[a] - on[[ty]]); any_on <- any_on | a
+    }
+    if (any(any_on)) Lp[any_on, ] <- lambda_matrix(theta, Xp[any_on, , drop = FALSE])
+  }
+  r <- inp$iv_first[j] + seq_len(inp$iv_n[j]) - 1L
+  r <- r[inp$iv$t_end[r] <= inp$p1$obs_upper[j] + 1e-9]
+  L <- rbind(Lp, Liv[r, , drop = FALSE])
+  LA <- matrix(0, nrow(L), K); okk <- which(theta$ok)
+  LA[, okk] <- L[, okk, drop = FALSE]^rep(theta$alpha[okk], each = nrow(L))
+  list(p0 = c(p0, inp$iv$t_start[r]), p1 = c(p1e, inp$iv$t_end[r]), L = L, LA = LA, npre = npre)
+}
+
+# Next exit of a sojourn entered at `entry`: for each competing exit k (columns ks of LA = lambda^alpha per piece) the time at which its cumulative
+# hazard reaches E[k] (E = standard exponential draws, one per exit), found piece by piece; the earliest wins. Pieces p0/p1e must end at the
+# horizon W; returns c(time, k), or c(Inf, 0) if no exit falls before the end of the last piece.
+p1_next_exit <- function(p0, p1e, LA, alpha, ks, entry, E) {
+  q <- which(p1e > entry); u0 <- pmax(p0[q] - entry, 0); u1 <- p1e[q] - entry
+  best <- Inf; bk <- 0L
+  for (ii in seq_along(ks)) {
+    k <- ks[ii]; al <- alpha[k]; la <- LA[q, k]
+    cs <- cumsum(la * (u1^al - u0^al)); h <- which(cs >= E[ii])[1L]
+    if (is.na(h)) next
+    t_exit <- entry + (u0[h]^al + (E[ii] - (if (h > 1L) cs[h - 1L] else 0)) / la[h])^(1 / al)
+    if (t_exit < best) { best <- t_exit; bk <- k }
+  }
+  c(best, bk)
+}
+
+# Candidate entries: paths from regen at time 0 under the piecewise hazards, one candidate per path = entry time of the state occupied at W_j
+# (kept only if that state is the plot's first state). Same random numbers as p1_candidates (one runif per competing exit per step); each exit
+# time is the exact inverse of its own cumulative hazard, the earliest wins.
+p1_candidates_pw <- function(pc, start_idx, s_j, W, alpha, out_k, to_idx, ok, M) {
+  if (W <= 0) return(if (s_j == start_idx) rep(0, M) else numeric(0))
+  np <- pc$npre; p0 <- pc$p0[seq_len(np)]; p1e <- pc$p1[seq_len(np)]; LA <- pc$LA[seq_len(np), , drop = FALSE]
+  cand <- numeric(M); n <- 0L
+  for (i in seq_len(M)) {
+    state <- start_idx; entry <- 0
+    repeat {
+      ks <- out_k[[state]]; ks <- ks[ok[ks]]
+      if (!length(ks)) break
+      nx <- p1_next_exit(p0, p1e, LA, alpha, ks, entry, -log(runif(length(ks))))
+      best <- nx[1L]; bk <- nx[2L]
+      if (bk == 0L || best >= W) break
+      state <- to_idx[bk]; entry <- best
+    }
+    if (state == s_j) { n <- n + 1L; cand[n] <- entry }
+  }
+  cand[seq_len(n)]
+}
+
+log1mexp <- function(h) ifelse(h > 0, ifelse(h < log(2), log(-expm1(-h)), log1p(-exp(-h))), -Inf)   # log(1 - exp(-h)), h >= 0
+
+# Cumulative hazard of all exits ks of the first state between the absolute times a <= b, for each candidate entry e (a, b scalars).
+p1_H_between <- function(pc, ks, alpha, cand, a, b) {
+  nc <- length(cand); np <- length(pc$p0)
+  U0 <- pmax(matrix(pmax(pc$p0, a), nc, np, byrow = TRUE) - cand, 0)
+  U1 <- pmax(matrix(pmin(pc$p1, b), nc, np, byrow = TRUE) - cand, U0)
+  H <- numeric(nc)
+  for (k in ks) H <- H + drop((U1^alpha[k] - U0^alpha[k]) %*% pc$LA[, k])
+  H
+}
+
+# C5: weight = [S(lo - e) - S(hi - e)] / S(W_j - e) with a change observed in (lo, hi]; S(hi - e) / S(W_j - e) without. In log space:
+# S(lo)/S(W) = exp(-H(W, lo)); [S(lo) - S(hi)]/S(W) = exp(-H(W, lo)) * (1 - exp(-H(lo, hi))); S(hi)/S(W) = exp(-H(W, hi)).
+p1_weights_pw <- function(cand, s_j, lo, hi, W, pc, alpha, out_k, ok) {
+  ks <- out_k[[s_j]]; ks <- ks[ok[ks]]
+  lw <- if (!is.na(lo)) -p1_H_between(pc, ks, alpha, cand, W, lo) + log1mexp(p1_H_between(pc, ks, alpha, cand, lo, hi)) else -p1_H_between(pc, ks, alpha, cand, W, hi)
+  if (anyNA(lw) || any(lw == Inf) || all(lw == -Inf)) return(NULL)
+  w <- exp(lw - max(lw)); w / sum(w)
+}
+
 # mode "mean": weighted mean (Stage 2); "draw": weighted draw (MI loop).
 # Plots without a usable candidate get W_j/2 and fallback = TRUE.
 p1_entries <- function(theta, inp, M = SIM_M, mode = c("mean", "draw"), n_cores = 1L) {
   mode <- match.arg(mode)
-  L <- lambda_matrix(theta, inp$X)
+  L0 <- lambda_matrix(theta, inp$X0); Liv <- lambda_matrix(theta, inp$Xiv); f_tsd <- tsd_fun()
   W <- inp$p1$W_j; sj <- inp$p1$s_idx; lo <- inp$p1$obs_lower; hi <- inp$p1$obs_upper
   to_idx <- inp$td$to_idx
   one <- function(j) {
-    cand <- p1_candidates(inp$start_idx, sj[j], W[j], theta$alpha, L[j, ], inp$out_k, to_idx, M)
+    pc <- p1_pieces(j, theta, inp, L0, Liv, f_tsd)
+    cand <- p1_candidates_pw(pc, inp$start_idx, sj[j], W[j], theta$alpha, inp$out_k, to_idx, theta$ok, M)
     if (!length(cand)) return(c(NA_real_, 0))
-    w <- p1_weights(cand, sj[j], lo[j], hi[j], theta$alpha, L[j, ], inp$out_k)
+    w <- p1_weights_pw(cand, sj[j], lo[j], hi[j], W[j], pc, theta$alpha, inp$out_k, theta$ok)
     if (is.null(w)) return(c(NA_real_, length(cand)))
     c(if (mode == "mean") sum(cand * w) else cand[sample.int(length(cand), 1L, prob = w)], length(cand))
   }
@@ -231,6 +367,15 @@ p1_entries <- function(theta, inp, M = SIM_M, mode = c("mean", "draw"), n_cores 
   fb <- is.na(res[, 1])
   entry <- ifelse(fb, W / 2, res[, 1])
   data.table(id_pe = inp$p1$id_pe, entry = entry, n_cand = res[, 2], fallback = fb)
+}
+
+# P1 fallbacks (no usable candidate) by first state: n_plots, n_fallback, share (printed per imputation; compare with the main run's 124-196 in total)
+p1_fallback_by_state <- function(p1, inp, m = NA_integer_) {
+  d <- data.table(first_state = inp$p1$first_state, fallback = p1$fallback)
+  r <- d[, .(n_plots = .N, n_fallback = sum(fallback)), by = first_state][order(-n_fallback, first_state)]
+  r[, share := n_fallback / n_plots]
+  if (!is.na(m)) r[, m := m]
+  r[]
 }
 
 # ------------------------------------------------------------------------------
@@ -409,7 +554,7 @@ run_one_imputation <- function(m, inp, models_seed, theta_seed, fit_fun, M = SIM
   res <- merge(res, ev, by = "k")
   # B6: per-fit cap diagnostic (one value per fit, repeated over its parameter rows like mlik); fixed column order for fwrite(append)
   res <- add_cap_columns(res, f$data, f$ks, inp)
-  out <- list(res = res, diag = data.table(m = m, p1_fallback = sum(p1$fallback), p1_no_candidate = sum(p1$n_cand == 0),
+  out <- list(p1_state = p1_fallback_by_state(p1, inp, m), res = res, diag = data.table(m = m, p1_fallback = sum(p1$fallback), p1_no_candidate = sum(p1$n_cand == 0),
                                     p2_events = dg$n_event, p2_midpoint = dg$n_midpoint,
                                     n_theta_fallback = th$n_fallback, n_fit_error = sum(vapply(f$models, function(x) !is.null(x$error), logical(1))),
                                     n_floored = b$n_floored, n_fitted = length(f$ks)))

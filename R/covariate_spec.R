@@ -46,9 +46,14 @@ make_scaling <- function(iv, cont = COV_CONT) {
                          sd   = vapply(cont, function(v) sd(iv[[v]],   na.rm = TRUE), numeric(1)))
 }
 
-add_model_covariates <- function(d, scaling, tsd_form = TSD_FORM) {   # TSD_FORM from R/config.R (source it first)
+# TSD (years) -> model column value (A5). Also used by P1 (WP4, C1) for the TSD at the midpoint of a piece.
+tsd_fun <- function(tsd_form = TSD_FORM) {
   stopifnot("tsd_form must be log1p or linear" = tsd_form %in% c("log1p", "linear"))
-  f_tsd <- if (tsd_form == "log1p") function(x) log(x + 1) else function(x) x / 10
+  if (tsd_form == "log1p") function(x) log(x + 1) else function(x) x / 10
+}
+
+add_model_covariates <- function(d, scaling, tsd_form = TSD_FORM) {   # TSD_FORM from R/config.R (source it first)
+  f_tsd <- tsd_fun(tsd_form)
   d <- data.table::copy(d)
   for (i in seq_len(nrow(scaling))) {
     v <- scaling$var[i]
