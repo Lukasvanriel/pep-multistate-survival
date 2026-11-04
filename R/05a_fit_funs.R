@@ -191,11 +191,17 @@ draw_theta_m <- function(models, inp, theta_seed, sampler = default_sampler) {
 }
 
 # lambda (years) per plot x transition from a covariate matrix; ok = FALSE -> 0
+# WP4 review: the former `lam[is.na(lam)] <- 0` is gone. It was not needed for missing coefficients (a failed fit has ok = FALSE and is zeroed by the line below;
+# an ok transition has no NA coefficient), and for an NA in X it silently gave ALL hazards of that row 0 (0 * NA = NA in X %*% t(beta)). An NA in X now stops.
 lambda_matrix <- function(theta, X) {
+  if (anyNA(X)) {
+    nc <- colSums(is.na(X)); nc <- nc[nc > 0]
+    stop(sprintf("lambda_matrix: NA in the covariate matrix X: column(s) %s; %d of %d rows have an NA (an NA would silently give every hazard of that row the value 0; fix the covariates, cf. A1)",
+                 paste0(if (is.null(names(nc))) which(colSums(is.na(X)) > 0) else names(nc), " (", nc, " rows)", collapse = ", "), sum(rowSums(is.na(X)) > 0), nrow(X)), call. = FALSE)
+  }
   eta <- X %*% t(theta$beta)
   lam <- exp(sweep(eta, 2, theta$intercept, "+"))
   lam[, !theta$ok] <- 0
-  lam[is.na(lam)] <- 0
   lam
 }
 

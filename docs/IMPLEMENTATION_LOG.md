@@ -276,3 +276,12 @@ Template:
   2. `Rscript R/tests/wp4_C1_check.R real`  (now also prints the flagged-but-off-at-interval-1 table for the real plots, per type)
   3. optional `Rscript R/tests/04c_check_rows.R`
   4. in WP5, after the first full imputation: `Rscript R/tests/wp4_C5_shift.R 1 1000`
+
+## WP4 -- lambda_matrix NA stop (2026-11-04)
+- Commits: "WP4: review fixes" = b15071b (previous entry); "WP4: lambda_matrix NA stop" = hash recorded in the line at the end of this entry.
+- User decision (review item 6): keep `lam[, !theta$ok] <- 0`; replace `lam[is.na(lam)] <- 0` by a stop at the top of `lambda_matrix` (R/05a_fit_funs.R) when X has an NA. Message names every column with NA and its number of rows, and the number of rows with any NA
+  (e.g. "NA in the covariate matrix X: column(s) z_gdd_3 (2 rows), tsd_fire (1 rows); 2 of 114 rows have an NA ...").
+- Test (`R/tests/wp4_C1_check.R`, new section 8, also in the `real` run): on clean X (Xiv, X0, X1; theta with and without a failed fit, as extract_theta returns it) the matrix is IDENTICAL to the version before; an NA in two rows of one column and one row of another stops with that message.
+  `wp4_C1_check.R` ALL CHECKS PASSED (KS cases unchanged: same seeds, same p-values), `wp4_C5_toy.R` and `wp3_B4_check.R` ALL CHECKS PASSED.
+- Effect on the pipeline: none expected (A1 guarantees no NA in the climate / soil columns, and the model matrices contain no other NA). If a run now stops here, the NA is real: it would previously have switched off every exit of that plot or interval.
+- Mac checks of WP4 unchanged and still waiting for the climate import (see the "review fixes" entry).

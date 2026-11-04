@@ -227,6 +227,16 @@ ok(nrow(rs) > 0 && all(is.finite(rs$entry_old)) && all(is.finite(rs$entry_new)),
 cat(sprintf("7. c5_shift on %d synthetic plots: mean old - corrected = %.2f y (random theta: information only here)\n", nrow(rs), mean(rs$entry_old - rs$entry_new)))
 invisible(capture.output(c5_report(copy(rs))))
 
+# ---- 8. lambda_matrix: clean X gives the matrix of before; an NA in X stops and names the column(s) and the number of rows --------------------------------
+lam_before <- function(theta, X) { eta <- X %*% t(theta$beta); lam <- exp(sweep(eta, 2, theta$intercept, "+")); lam[, !theta$ok] <- 0; lam[is.na(lam)] <- 0; lam }   # the WP3 / WP4 version
+th_f <- theta; th_f$ok[2] <- FALSE; th_f$intercept[2] <- NA_real_; th_f$beta[2, ] <- 0                                                                       # a failed fit, as extract_theta returns it
+for (X in list(inp$Xiv, inp$X0, inp$X1)) ok(identical(lambda_matrix(th_f, X), lam_before(th_f, X)) && identical(lambda_matrix(theta, X), lam_before(theta, X)), "lambda_matrix differs from the version before on a clean X")
+Xna <- inp$Xiv; Xna[c(3, 9), "z_gdd_3"] <- NA; Xna[9, "tsd_fire"] <- NA
+msg <- tryCatch({ lambda_matrix(theta, Xna); NA_character_ }, error = function(e) conditionMessage(e))
+ok(!is.na(msg) && grepl("z_gdd_3 (2 rows)", msg, fixed = TRUE) && grepl("tsd_fire (1 rows)", msg, fixed = TRUE) && grepl(sprintf("2 of %d rows have an NA", nrow(Xna)), msg, fixed = TRUE),
+   "lambda_matrix did not stop with the expected message on an NA in X", msg)
+cat(sprintf("8. lambda_matrix: identical to the version before on clean X (also with a failed fit); an NA in X stops: \"%s\"\n", msg))
+
 # ---- information: first-visit flags that are off at the interval-1 end visit (per type; no change to P1) -------------------------------------------
 off_at_end1 <- function(ir) {
   i1 <- ir$iv[interval == 1L]; fvq <- ir$p1[match(i1$id_pe, id_pe)]; jf <- match(i1$id_pe, ir$p1$id_pe)
