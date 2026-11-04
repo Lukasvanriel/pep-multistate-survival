@@ -285,3 +285,4 @@ Template:
   `wp4_C1_check.R` ALL CHECKS PASSED (KS cases unchanged: same seeds, same p-values), `wp4_C5_toy.R` and `wp3_B4_check.R` ALL CHECKS PASSED.
 - Effect on the pipeline: none expected (A1 guarantees no NA in the climate / soil columns, and the model matrices contain no other NA). If a run now stops here, the NA is real: it would previously have switched off every exit of that plot or interval.
 - Mac checks of WP4 unchanged and still waiting for the climate import (see the "review fixes" entry).
+- Hash of "WP4: lambda_matrix NA stop": be794e5 (recorded in a docs-only follow-up commit).
