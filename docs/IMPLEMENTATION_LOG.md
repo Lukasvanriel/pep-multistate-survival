@@ -126,3 +126,15 @@ Template:
     `sugar_maple->regen` (scratch table).
   - `05a_fit_funs.R` still uses its earlier Weibull variant / priors until WP3; `WEIBULL_VARIANT`, `COEF_PRIOR_SD`, `XREGEN_EXIT_RULE` are not read anywhere yet.
   - A5: P1/P2 get the new TSD columns through `add_model_covariates()` as planned; nothing else reads the decade columns of `iv`.
+
+## WP2 -- review fixes (2026-11-04)
+- Commit: "WP2: review fixes" (b2c314d) and "WP2: log correction" (this entry).
+- Changes: WP7 checklist gets the item `09: LOW_EVENTS_MAX <- MIN_EVENTS + 4L (moved from B7)`; `tests/04c` CHECK 6 compares the new `transition_set`
+  (TABLE_DIR) with `data/tables/main/transition_set.rds` (hard check: kept set, n_events, n_fire, n_pest, n_harv0/1/2, fire_term, pest_term; prints the
+  changed harvest terms and the transitions without `z_gdd_3`; skipped with a printed note if the main table is missing or is the table under test);
+  the `covariate_spec.R` header comment on "main effects both present" is corrected for A11 transitions.
+- Correction: the review chat said TABLE_DIR equals `data/tables/main`, so 04 would overwrite the baseline and a copy was needed. That was wrong. Since
+  `e4e1f41` `RUN_TAG` is "final", so TABLE_DIR is `data/tables/final` and `data/tables/main` stays untouched (config.R line 9). No copy is needed and
+  no code change. The "table under test IS the baseline" skip in `tests/04c` only fires if RUN_TAG is set back to "main".
+- Not run: the new 04c block has only been parse-checked (no data.table in the cloud workspace). On a scratch table without the 5 WP1 plots it is
+  expected to differ by those plots; on the full table it must pass.
