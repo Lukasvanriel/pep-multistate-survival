@@ -42,15 +42,15 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] Check (implementation step 2): only harvest terms (A2, A4, A6) and regen->sugar_maple's GDD main term (A11) change; transitions, events, fire and pest terms identical; 69 harvest terms; 1,537 X->regen intervals with D_heavy
 
 ## WP3 -- B1-B6 (05a fit + theta, 05, 07, 08)   Commit: ______   Review: [ ]
-- [ ] B1 variant from config in every INLA call; SIM_DIR / model_fitting.R source removed from 05 and 07; run_meta records it
-- [ ] B2 control.fixed: N(0, COEF_PRIOR_SD^2), flat intercept
-- [ ] B3 intercept kept on INLA's (decade) scale in tidy_fit / mi_raw / screen / pooling; years-scale intercept computed in 08 (reporting only)
-- [ ] B4 variant-0 -> P1/P2 conversion in extract_theta and draw_theta_m; extras$theta_m stores the variant-0 draws
-- [ ] B4 unit test: S(t) from variant-0 parameters == S(t) from converted lambda_1, alpha (1e-10), 3 rows x t = 5, 20, 50 y
-- [ ] B5 screen unchanged (both rules; refs from the new m1-30)
-- [ ] B6 fit_map_v0 + H_at moved to 05a; per-fit cap columns in mi_raw; 08 writes cap_check_<tag>.csv
-- [ ] B6 check: the moved functions reproduce `cap_test_new_rows_m01_nocut/results.csv` on the test's rows
-- [ ] B7 recount_events() called in run_stage1() after build_rows()
+- [ ] B1 variant from config in every INLA call; SIM_DIR / model_fitting.R source removed from 05 and 07; run_meta records it  -- *code done (05a, 05, 07; sensitivity/11 is WP7); check `run_meta$inla_args$control.family$variant == 0` needs a 05 run on the Mac (wp3_B4_check.R inla checks the same on one real fit)*
+- [ ] B2 control.fixed: N(0, COEF_PRIOR_SD^2), flat intercept  -- *code done; check (run_meta shows the values) pending the Mac run; wp3_B4_check.R inla asserts them on one real fit*
+- [x] B3 intercept kept on INLA's (decade) scale in tidy_fit / mi_raw / screen / pooling; years-scale intercept computed in 08 (reporting only)  -- *no `- log(10)` left on the INLA estimates (only `v0_to_p1p2` for P1/P2); 08 `intercept_years_<tag>.csv` matches an independent calculation on synthetic fits*
+- [x] B4 variant-0 -> P1/P2 conversion in extract_theta and draw_theta_m; extras$theta_m stores the variant-0 draws  -- *`v0_to_p1p2()`; theta_m columns: alpha, intercept_dec, raw beta*
+- [ ] B4 unit test: S(t) from variant-0 parameters == S(t) from converted lambda_1, alpha (1e-10), 3 rows x t = 5, 20, 50 y  -- *mock fits passed (max difference 4e-16, extract_theta, draw_theta_m, fallback); the one-real-fit part needs INLA: `Rscript R/tests/wp3_B4_check.R inla` on the Mac*
+- [ ] B5 screen unchanged (both rules; refs from the new m1-30)  -- *logic untouched; 07 now prints the full reference table; check is the printout in the first 07 run on the Mac*
+- [x] B6 fit_map_v0 + H_at moved to 05a; per-fit cap columns in mi_raw; 08 writes cap_check_<tag>.csv  -- *columns maxH_inla, n_above_inla, maxH_map, n_above_map, z_map_max, z_map_alpha (z_map_alpha added by user decision); `add_cap_columns` and 08 tested on mock / synthetic data; columns filled in a real mi_raw is a WP5 check*
+- [x] B6 check: the moved functions reproduce `cap_test_new_rows_m01_nocut/results.csv` on the test's rows  -- *180 fits (arms A, B): n_above_* identical; max relative difference maxH_map 6.3e-7, alpha_map 1.3e-8, maxH_inla 2.8e-13*
+- [x] B7 recount_events() called in run_stage1() after build_rows()  -- *plan grep finds only config.R and the fit function; wiring tested with stubs; skipped (printed) when SUBSAMPLE_N is set, so the first real run is the full Stage 1*
 
 ## WP4 -- C1, C5 (P1; 04 plot_info first-visit values)   Commit: ______   Review: [ ]
 - [ ] C1.1 04 writes first-visit covariates to plot_info (+ A1.5 NA check if not done in WP1)

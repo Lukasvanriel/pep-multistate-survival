@@ -10,8 +10,9 @@
 #   * P1 weighting bracket from the real visits (no hidden-hop flag, no oracle)
 #   * P1 finds no candidate  -> entry W_j/2, flagged (the simulation dropped the plot)
 #   * transition with a failed fit (theta NA) -> hazard 0 in P1, midpoint in P2, counted
-# Units: P1 and P2 work in YEARS; the INLA intercept is on the decade scale and is
-# corrected by -LOG_TIME_SCALE exactly as in the simulation. alpha and betas need no correction.
+# Units (WP3, B3/B4): the models are fitted as Weibull VARIANT 0 on the decade scale, S(t) = exp(-e^eta (t/10)^alpha). The INLA
+# intercept is kept on that scale everywhere (tidy_fit, mi_raw, screen, pooling). P1 and P2 work in the variant-1 form in YEARS,
+# S(t) = exp(-(lambda1 t)^alpha); theta (extract_theta, draw_theta_m) holds the CONVERTED values (v0_to_p1p2) plus the raw variant-0 values.
 # ==============================================================================
 
 library(data.table)
@@ -24,14 +25,18 @@ if (!exists("SD_MIN")) SD_MIN <- 1e-3   # alpha posterior SD below this = near-d
 if (!exists("N_COV_SAMPLES")) N_COV_SAMPLES <- 1000L   # posterior samples per fit for the joint covariance (0 = skip)
 LOG_TIME_SCALE <- log(10)   # TIME_SCALE = 10 (04b_build_rows.R)
 ALPHA_NAME     <- "alpha parameter for weibullsurv"
+CAP            <- -log(0.001 * 2^-23)   # 22.85: INLA clamps F(truncation) at 1 - 0.001 * FLT_EPSILON (B6)
 
 # ------------------------------------------------------------------------------
 # fit_inla_models_pc() (2026-10-26, T5/T6): pipeline copy of the simulation's fit_inla_models() (model_fitting.R, read-only; both branches
-# copied unchanged) with ONE change: an explicit PC prior on the Weibull shape, pc.alphaw(ALPHA_PRIOR) (R/config.R), and one thread per fit.
-# Checked 2026-10-26: with ALPHA_PRIOR = 5 the fits are identical to the original (5 transitions, max difference 3e-7 posterior SDs).
+# copied unchanged) with these changes: an explicit PC prior on the Weibull shape, pc.alphaw(ALPHA_PRIOR) (R/config.R), one thread per fit,
+# and (WP3, B1/B2) the Weibull variant from WEIBULL_VARIANT and control.fixed = N(0, COEF_PRIOR_SD^2) on the coefficients, flat intercept.
+# Checked 2026-10-26: with ALPHA_PRIOR = 5 (variant 1, default fixed priors) the fits were identical to the original (max difference 3e-7 SD).
 # ------------------------------------------------------------------------------
 fit_inla_models_pc <- function(data_list, rhs_formula, exact = FALSE, int_strategy = "grid") {
-  stopifnot("ALPHA_PRIOR must be set in R/config.R" = exists("ALPHA_PRIOR"))
+  stopifnot("ALPHA_PRIOR must be set in R/config.R" = exists("ALPHA_PRIOR"),
+            "WEIBULL_VARIANT must be set in R/config.R" = exists("WEIBULL_VARIANT"),
+            "COEF_PRIOR_SD must be set in R/config.R" = exists("COEF_PRIOR_SD"))
   K <- length(data_list)
   if (length(rhs_formula) == 1) rhs_formula <- rep(rhs_formula, K)
   stopifnot(length(rhs_formula) == K)
@@ -45,7 +50,8 @@ fit_inla_models_pc <- function(data_list, rhs_formula, exact = FALSE, int_strate
       f_str <- sprintf("inla.surv(time = time_lower, time2 = Tstop, event = status, truncation = truncation) ~ %s", rhs_formula[k])
     }
     tryCatch(INLA::inla(as.formula(f_str), family = "weibullsurv", data = d,
-                        control.family = list(variant = 1, hyper = list(alpha = list(prior = "pc.alphaw", param = ALPHA_PRIOR))),
+                        control.family = list(variant = WEIBULL_VARIANT, hyper = list(alpha = list(prior = "pc.alphaw", param = ALPHA_PRIOR))),
+                        control.fixed = list(mean = 0, prec = 1 / COEF_PRIOR_SD^2, mean.intercept = 0, prec.intercept = 0),
                         control.compute = list(config = TRUE),
                         control.inla = list(strategy = "adaptive", int.strategy = int_strategy, control.vb = list(enable = FALSE)),
                         num.threads = "1:1"),
@@ -86,44 +92,59 @@ prepare_fit_inputs <- function(proc_dir, subsample_n = NULL, seed = 1L) {
   stopifnot(identical(p1$id_pe, f1$id_pe), !anyNA(p1$s_idx))
   X <- as.matrix(f1[, ..terms])
 
-  list(iv = iv, tr = tr, td = td, states = states, mask = mask, terms = terms, rhs = rhs_formulas(mask),
+  list(iv = iv, tr = tr, td = td, subsampled = !is.null(subsample_n), states = states, mask = mask, terms = terms, rhs = rhs_formulas(mask),
        kmat = kmat, out_k = out_k, p1 = p1, X = X, Xiv = as.matrix(iv[, ..terms]),
        start_idx = match("regen", states), scaling = scaling,
        keep_cols = c("fire", "harv", "pest", "year_end", terms))
 }
 
 # ------------------------------------------------------------------------------
-# theta: list(alpha, intercept [years], beta [K x P, 0 = term absent], ok [K])
+# v0_to_p1p2() (B4): variant-0 fit (intercept b0 on the decade scale, coefficients beta, shape alpha) -> variant-1 form in YEARS used by
+# P1 / P2. S = exp(-e^eta (t/10)^alpha) = exp(-(lambda1 t)^alpha) with log lambda1 = eta/alpha - log(10): intercept = b0/alpha - log 10,
+# beta = beta/alpha. beta may be a vector (one fit) or a matrix with one row per fit (alpha then has one value per row).
+# ------------------------------------------------------------------------------
+v0_to_p1p2 <- function(b0, beta, alpha) {
+  stopifnot("v0_to_p1p2: only Weibull variant 0 is supported (WEIBULL_VARIANT in R/config.R)" = identical(as.integer(WEIBULL_VARIANT), 0L))
+  list(intercept = b0 / alpha - LOG_TIME_SCALE, beta = beta / alpha)
+}
+
+# ------------------------------------------------------------------------------
+# theta: list(alpha, intercept [years, converted], beta [K x P, converted, 0 = term absent], ok [K],
+#             intercept_dec [raw variant-0 intercept, decade scale], beta_v0 [K x P, raw variant-0 coefficients])
+# extract_theta(): posterior means (conversion evaluated at the means; used for Stage-2 seeds only).
 # ------------------------------------------------------------------------------
 extract_theta <- function(models, inp, stat = "mean") {
   K <- nrow(inp$td); P <- length(inp$terms)
-  alpha <- rep(NA_real_, K); icpt <- rep(NA_real_, K)
-  beta <- matrix(0, K, P, dimnames = list(inp$td$label, inp$terms))
+  alpha <- rep(NA_real_, K); b0 <- rep(NA_real_, K)
+  beta0 <- matrix(0, K, P, dimnames = list(inp$td$label, inp$terms))
   for (k in seq_len(K)) {
     m <- models[[k]]; if (!is.null(m$error)) next
     a <- tryCatch(m$summary.hyperpar[ALPHA_NAME, stat], error = function(e) NA_real_)
     ic <- tryCatch(m$summary.fixed["(Intercept)", stat], error = function(e) NA_real_)
     alpha[k] <- if (length(a) == 1) a else NA_real_
-    icpt[k]  <- if (length(ic) == 1) ic - LOG_TIME_SCALE else NA_real_
+    b0[k]    <- if (length(ic) == 1) ic else NA_real_
     for (tm in colnames(inp$mask)[inp$mask[k, ]]) {
       b <- tryCatch(m$summary.fixed[tm, stat], error = function(e) NA_real_)
-      beta[k, tm] <- if (length(b) == 1) b else NA_real_
+      beta0[k, tm] <- if (length(b) == 1) b else NA_real_
     }
   }
-  ok <- !is.na(alpha) & !is.na(icpt) & !apply(is.na(beta), 1, any)
-  beta[!ok, ] <- 0
-  list(alpha = alpha, intercept = icpt, beta = beta, ok = ok)
+  ok <- !is.na(alpha) & alpha > 0 & !is.na(b0) & !apply(is.na(beta0), 1, any)
+  beta0[!ok, ] <- 0
+  icpt <- rep(NA_real_, K); beta <- beta0
+  if (any(ok)) { cv <- v0_to_p1p2(b0[ok], beta0[ok, , drop = FALSE], alpha[ok]); icpt[ok] <- cv$intercept; beta[ok, ] <- cv$beta }
+  list(alpha = alpha, intercept = icpt, beta = beta, ok = ok, intercept_dec = b0, beta_v0 = beta0)
 }
 
 # seed > 0 and a single thread make INLA's sampler reproducible (seed = 0 means a clock seed)
 default_sampler <- function(n, m, seed = 0L) INLA::inla.posterior.sample(n, m, seed = seed, num.threads = "1:1")
 
-# One posterior draw per transition. A transition whose fit failed, or whose
-# names are not found, falls back to the seed point estimate (theta_seed); if that
-# is not ok either it stays ok = FALSE (hazard 0 / midpoint in the imputation).
+# One posterior draw per transition (variant-0 intercept, coefficients and alpha of the SAME draw, converted with that draw's alpha).
+# A transition whose fit failed, or whose names are not found, falls back to the seed point estimate (theta_seed); if that
+# is not ok either it stays ok = FALSE (hazard 0 / midpoint in the imputation). th$intercept_dec / th$beta_v0 hold the raw variant-0 values.
 draw_theta_m <- function(models, inp, theta_seed, sampler = default_sampler) {
   K <- nrow(inp$td); P <- length(inp$terms)
-  th <- list(alpha = theta_seed$alpha, intercept = theta_seed$intercept, beta = theta_seed$beta, ok = theta_seed$ok)
+  th <- list(alpha = theta_seed$alpha, intercept = theta_seed$intercept, beta = theta_seed$beta, ok = theta_seed$ok,
+             intercept_dec = theta_seed$intercept_dec, beta_v0 = theta_seed$beta_v0)
   n_fallback <- 0L
   for (k in seq_len(K)) {
     m <- models[[k]]; if (!is.null(m$error)) { n_fallback <- n_fallback + 1L; next }
@@ -132,13 +153,16 @@ draw_theta_m <- function(models, inp, theta_seed, sampler = default_sampler) {
     ii <- grepl("^\\(Intercept\\)", ln)
     tms <- colnames(inp$mask)[inp$mask[k, ]]
     idx <- lapply(tms, function(tm) grepl(paste0("^", tm, "($|:)"), ln))
-    if (!any(ii) || !all(vapply(idx, any, logical(1))) || !(ALPHA_NAME %in% names(samp$hyperpar))) {
-      n_fallback <- n_fallback + 1L; warning(sprintf("draw_theta_m(): names not found for %s, using seed estimate", inp$td$label[k])); next
+    a <- if (ALPHA_NAME %in% names(samp$hyperpar)) samp$hyperpar[[ALPHA_NAME]] else NA_real_
+    if (!any(ii) || !all(vapply(idx, any, logical(1))) || !is.finite(a) || a <= 0) {
+      n_fallback <- n_fallback + 1L; warning(sprintf("draw_theta_m(): names not found (or alpha not > 0) for %s, using seed estimate", inp$td$label[k])); next
     }
-    th$intercept[k] <- samp$latent[ii, 1][1] - LOG_TIME_SCALE
-    th$beta[k, ] <- 0
-    for (j in seq_along(tms)) th$beta[k, tms[j]] <- samp$latent[idx[[j]], 1][1]
-    th$alpha[k] <- samp$hyperpar[[ALPHA_NAME]]
+    b0 <- samp$latent[ii, 1][1]
+    th$beta_v0[k, ] <- 0
+    for (j in seq_along(tms)) th$beta_v0[k, tms[j]] <- samp$latent[idx[[j]], 1][1]
+    cv <- v0_to_p1p2(b0, th$beta_v0[k, ], a)
+    th$intercept_dec[k] <- b0; th$alpha[k] <- a
+    th$intercept[k] <- cv$intercept; th$beta[k, ] <- cv$beta
     th$ok[k] <- TRUE
   }
   th$n_fallback <- n_fallback
@@ -267,8 +291,8 @@ fit_diagnostics <- function(m) {
 
 # Compact extras per fit (kept for every fit of every imputation): full posterior summaries,
 # marginals, evidence, optimiser trace, warnings and the JOINT posterior covariance of
-# (Intercept, betas, alpha) from n_cov posterior samples. Intercept is on INLA's decade scale
-# (subtract LOG_TIME_SCALE for years); covariances are unaffected by that shift.
+# (Intercept, betas, alpha) from n_cov posterior samples. Intercept is on INLA's decade scale (variant 0);
+# the years-scale intercept b0 - alpha*log(10) is computed in 08 from this covariance (B3).
 fit_extras <- function(m, tms, sampler, n_cov = N_COV_SAMPLES, seed = 1L) {
   if (!is.null(m$error)) return(list(error = as.character(m$error)[1]))
   g <- function(expr) tryCatch(expr, error = function(e) NULL)
@@ -298,10 +322,53 @@ tidy_fit <- function(models, inp, ks = seq_len(nrow(inp$td))) {   # models[[j]] 
     fx <- m$summary.fixed; hy <- m$summary.hyperpar
     g <- function(nm, col) if (nm %in% rownames(fx)) fx[nm, col] else NA_real_
     data.table(k = k, parameter = pars,
-               est = c(hy[ALPHA_NAME, "mean"], g("(Intercept)", "mean") - LOG_TIME_SCALE, vapply(tms, g, numeric(1), col = "mean")),
+               est = c(hy[ALPHA_NAME, "mean"], g("(Intercept)", "mean"), vapply(tms, g, numeric(1), col = "mean")),   # intercept: INLA decade scale, variant 0 (B3)
                sd  = c(hy[ALPHA_NAME, "sd"],   g("(Intercept)", "sd"),                       vapply(tms, g, numeric(1), col = "sd")),
                fit_error = FALSE, error_msg = dgn$error_msg, mode_status = dgn$mode_status, mlik = dgn$mlik, log_warn = dgn$log_warn)
   }))[, label := inp$td$label[k]][]
+}
+
+# ------------------------------------------------------------------------------
+# B6: cap diagnostic. fit_map_v0() = penalised maximum likelihood with the SAME variant-0 likelihood as the INLA fit (left-truncated
+# Weibull, N(0, COEF_PRIOR_SD^2) penalty on the coefficients, flat intercept, NO truncation cap); H_at() = cumulative hazard at the
+# truncation time of every row. Moved unchanged from tests/22_cap_test_new_rows.R (SIGMA_B -> COEF_PRIOR_SD).
+# Diagnostics only, not a validity gate (user decision 2026-10-22).
+# ------------------------------------------------------------------------------
+fit_map_v0 <- function(d, terms) {      # h = alpha exp(eta) t^(alpha-1), H = exp(eta) t^alpha
+  X <- cbind(1, as.matrix(d[, ..terms])); X[is.na(X)] <- 0; Tt <- d$Tstop; tr <- d$truncation; s <- d$status; lT <- log(Tt)
+  nll <- function(th) { a <- exp(th[1]); eta <- drop(X %*% th[-1]); -(sum(s * (th[1] + eta + (a - 1) * lT)) - sum(exp(eta) * (Tt^a - tr^a))) + sum(th[-(1:2)]^2) / (2 * COEF_PRIOR_SD^2) }
+  o <- optim(c(0, log(max(sum(s), 0.5) / sum(Tt - tr)), rep(0, length(terms))), nll, method = "BFGS", control = list(maxit = 10000, reltol = 1e-12))
+  V <- tryCatch(solve(optimHess(o$par, nll)), error = function(e) NULL); se <- if (is.null(V)) rep(NA_real_, length(o$par)) else sqrt(pmax(diag(V), 0))
+  a <- exp(o$par[1])
+  list(tab = data.table(parameter = c("alpha", "(Intercept)", terms), est = c(a, o$par[-1]), sd = c(a * se[1], se[-1])), conv = o$convergence)
+}
+H_at <- function(d, terms, tab) {       # cumulative hazard at the truncation time of every row, at the given estimates
+  est <- setNames(tab$est, tab$parameter); if (anyNA(est)) return(c(maxH = NA_real_, n_above = NA_real_, n_above_ev = NA_real_))
+  X <- as.matrix(d[, ..terms]); X[is.na(X)] <- 0
+  H <- exp(est[["(Intercept)"]] + drop(X %*% est[terms])) * d$truncation^est[["alpha"]]
+  c(maxH = max(H), n_above = sum(H > CAP), n_above_ev = sum(H > CAP & d$status == 1L))
+}
+CAP_COLS <- c("maxH_inla", "n_above_inla", "maxH_map", "n_above_map", "z_map_max", "z_map_alpha")
+# One fit: d = its fitting data (data.frame), tms = its terms, tab = tidy_fit rows of the fit (parameter, est, sd; INLA means). Returns the
+# CAP_COLS values. z_map_max = largest |INLA - MAP| / MAP SE over the term coefficients (not alpha, not the intercept); z_map_alpha the same for alpha.
+# NA for a failed INLA fit or a failed MAP.
+cap_diagnostics <- function(d, tms, tab) {
+  na <- setNames(rep(NA_real_, length(CAP_COLS)), CAP_COLS)
+  if (isTRUE(any(tab$fit_error)) || anyNA(tab$est)) return(na)
+  d <- as.data.table(d)
+  fm <- tryCatch(fit_map_v0(d, tms), error = function(e) NULL); if (is.null(fm)) return(na)
+  hi <- H_at(d, tms, tab); hm <- H_at(d, tms, fm$tab)
+  z <- merge(tab[, .(parameter, inla = est)], fm$tab[, .(parameter, map = est, se = sd)], by = "parameter")[, z := abs(inla - map) / se]
+  zmax <- function(x) if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE)
+  c(maxH_inla = hi[["maxH"]], n_above_inla = hi[["n_above"]], maxH_map = hm[["maxH"]], n_above_map = hm[["n_above"]],
+    z_map_max = zmax(z[!parameter %in% c("alpha", "(Intercept)"), z]), z_map_alpha = zmax(z[parameter == "alpha", z]))
+}
+
+# Adds the CAP_COLS columns to tidy_fit() output: one value per fit (k), repeated over its parameter rows. data_list[[j]] = fitting data of transition ks[j].
+add_cap_columns <- function(res, data_list, ks, inp) {
+  cap <- rbindlist(lapply(seq_along(ks), function(j) { kk <- ks[j]
+    as.data.table(as.list(c(k = kk, cap_diagnostics(data_list[[j]], colnames(inp$mask)[inp$mask[kk, ]], res[res$k == kk])))) }))
+  merge(res, cap, by = "k")
 }
 
 # ------------------------------------------------------------------------------
@@ -310,6 +377,9 @@ tidy_fit <- function(models, inp, ks = seq_len(nrow(inp$td))) {   # models[[j]] 
 run_stage1 <- function(inp, fit_fun) {
   fe <- setNames(inp$p1$W_j / 2, inp$p1$id_pe)
   b <- build_rows(inp$iv, fe, inp$states, inp$tr, keep_cols = inp$keep_cols)
+  # B7: recount events on the final rows before the first fit (stops on a mismatch). Skipped for a subsample: inp$tr holds full-data counts.
+  if (isTRUE(inp$subsampled)) cat("recount_events(): skipped (SUBSAMPLE_N is set; transition_set counts are full-data counts)\n") else {
+    rc <- recount_events(b$rows, inp$tr); cat(sprintf("recount_events(): OK, %d kept transitions, counts equal transition_set, all >= %d events\n", nrow(rc), MIN_EVENTS)) }
   f <- fit_rows(b$rows, inp, fit_fun)
   list(theta = extract_theta(f$models, inp), tidy = tidy_fit(f$models, inp), n_events = f$n_events, n_floored = b$n_floored)
 }
@@ -336,14 +406,16 @@ run_one_imputation <- function(m, inp, models_seed, theta_seed, fit_fun, M = SIM
   res <- tidy_fit(f$models, inp, f$ks); res[, m := m]
   ev <- data.table(k = f$ks, n_events = as.integer(f$n_events))
   res <- merge(res, ev, by = "k")
+  # B6: per-fit cap diagnostic (one value per fit, repeated over its parameter rows like mlik); fixed column order for fwrite(append)
+  res <- add_cap_columns(res, f$data, f$ks, inp)
   out <- list(res = res, diag = data.table(m = m, p1_fallback = sum(p1$fallback), p1_no_candidate = sum(p1$n_cand == 0),
                                     p2_events = dg$n_event, p2_midpoint = dg$n_midpoint,
                                     n_theta_fallback = th$n_fallback, n_fit_error = sum(vapply(f$models, function(x) !is.null(x$error), logical(1))),
                                     n_floored = b$n_floored, n_fitted = length(f$ks)))
   tms_k <- lapply(seq_len(nrow(inp$td)), function(k) colnames(inp$mask)[inp$mask[k, ]])
   out$extras <- list(
-    theta_m = data.table(k = seq_len(nrow(inp$td)), label = inp$td$label, ok = th$ok, alpha = th$alpha, intercept_years = th$intercept,
-                         as.data.table(th$beta)),
+    theta_m = data.table(k = seq_len(nrow(inp$td)), label = inp$td$label, ok = th$ok, alpha = th$alpha, intercept_dec = th$intercept_dec,
+                         as.data.table(th$beta_v0)),   # B4: the variant-0 draws (decade intercept, raw beta, alpha)
     p1 = p1[, .(id_pe, entry, n_cand, fallback)],
     p2 = b$segs[type == "event", .(id_pe, interval, from, to = event_to, exit_abs = end_abs, floored)],
     fits = setNames(lapply(seq_along(f$ks), function(j) fit_extras(f$models[[j]], tms_k[[f$ks[j]]], sampler, N_COV_SAMPLES, sample.int(1e6, 1L))), inp$td$label[f$ks]))

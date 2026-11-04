@@ -19,13 +19,12 @@
 suppressPackageStartupMessages({ library(data.table); library(here); library(parallel); library(INLA) })
 source(here::here("R", "config.R"))   # RUN_TAG, TABLE_DIR, FIT_DIR, ALPHA_PRIOR
 INLA::inla.setOption(num.threads = "1:1")   # T6: one thread per INLA call (also set in every fit call)
-SIM_DIR <- "/Users/lukas/Desktop/RProjects/Quebec-forest-succession/R-scripts/Sim4stateExact/p1p2_v2_test"
 SEED <- 2026L; N_WORKERS <- 6L; M_MI <- 30L; SIM_M <- 200L; SD_MIN <- 1e-3; N_COV_SAMPLES <- 1000L
 TARGET <- 30L; MAX_CAND <- 500L; RATIO_MIN <- 0.1; Z_MAX <- 4
 OUT_DIR <- FIT_DIR; options(width = 200)
-source(file.path(SIM_DIR, "model_fitting.R")); source(here("R", "covariate_spec.R")); source(here("R", "04b_build_rows.R")); source(here("R", "05a_fit_funs.R"))
+source(here("R", "covariate_spec.R")); source(here("R", "04b_build_rows.R")); source(here("R", "05a_fit_funs.R"))
 RNGkind("L'Ecuyer-CMRG"); set.seed(SEED); fit_fun <- fit_inla_models_pc   # T5 (2026-10-26): same fit function and prior as 05
-cat(sprintf("INLA fits: alpha prior pc.alphaw(%s), one thread per fit\n", format(ALPHA_PRIOR)))
+cat(sprintf("INLA fits: Weibull variant %d, N(0, %g^2) on coefficients, alpha prior pc.alphaw(%s), one thread per fit\n", WEIBULL_VARIANT, COEF_PRIOR_SD, format(ALPHA_PRIOR)))
 inp <- prepare_fit_inputs(TABLE_DIR, subsample_n = NULL, seed = SEED)
 s2 <- readRDS(file.path(OUT_DIR, "stage2.rds"))
 
@@ -48,7 +47,9 @@ if (file.exists(ref_path)) { ref <- fread(ref_path); cat("Screen references: loa
   if (nrow(ref) < nrow(inp$td)) stop("No ratio-passing fit among m1-", M_MI, " for: ", paste(setdiff(inp$td$label, inp$td$label[ref$k]), collapse = ", "), " -- decide before continuing.")
   fwrite(ref, ref_path); cat("Screen references computed from m1-", M_MI, " and FROZEN in ", basename(ref_path), "\n", sep = "")
 }
-print(merge(ref, inp$td[, .(k, label)], by = "k")[n_ref < 10])   # transitions whose reference rests on < 10 fits
+ref_tab <- merge(ref, inp$td[, .(k, label)], by = "k")[order(k)]
+cat("Screen reference table (intercept on INLA's decade scale, variant 0), printed before any candidate is fitted:\n"); print(ref_tab, nrows = nrow(ref_tab))
+cat("Transitions whose reference rests on < 10 fits:\n"); print(ref_tab[n_ref < 10])
 
 raw_path  <- file.path(OUT_DIR, sprintf("mi_raw_redraw_%s.csv", RUN_TAG)); diag_path <- file.path(OUT_DIR, sprintf("mi_diag_redraw_%s.csv", RUN_TAG))
 prog_path <- file.path(OUT_DIR, sprintf("redraw_progress_%s.csv", RUN_TAG))

@@ -10,9 +10,9 @@
 # No bias correction, no truth, no coverage: the pooled table is the result.
 #
 # Needs: 04_prepare_inla.R run (data/tables/<RUN_TAG>/*.rds); covariate_spec.R, 04b_build_rows.R,
-#        05a_fit_funs.R in this folder. The simulation folder is only SOURCED (read-only) for
-#        model_fitting.R (fit_inla_models, kept for reference). Since 2026-10-26 (T5/T6) the fits use the pipeline copy
-#        fit_inla_models_pc() (05a) with the alpha prior pc.alphaw(ALPHA_PRIOR) from R/config.R and one thread per fit.
+#        05a_fit_funs.R in this folder. No dependency on the simulation folder (WP3, B1). The fits use fit_inla_models_pc() (05a):
+#        Weibull variant WEIBULL_VARIANT, N(0, COEF_PRIOR_SD^2) on the coefficients, flat intercept, alpha prior pc.alphaw(ALPHA_PRIOR)
+#        (all from R/config.R), one thread per fit.
 # Each stage is checkpointed in data-output/<RUN_TAG>/fits/ (FIT_DIR); delete a file to redo that stage.
 # ==============================================================================
 suppressPackageStartupMessages({ library(data.table); library(here); library(parallel); library(INLA) })
@@ -20,7 +20,6 @@ source(here::here("R", "config.R"))   # RUN_TAG, TABLE_DIR, FIT_DIR, ALPHA_PRIOR
 INLA::inla.setOption(num.threads = "1:1")   # T6: one thread per INLA call (also set in every fit call)
 
 # ---- config ------------------------------------------------------------------
-SIM_DIR       <- "/Users/lukas/Desktop/RProjects/Quebec-forest-succession/R-scripts/Sim4stateExact/p1p2_v2_test"
 SUBSAMPLE_N   <- NULL          # e.g. 500 for a smoke test (fits will be sparse); NULL = all plots
 SEED          <- 2026L
 N_WORKERS     <- 6L            # MI loop workers; Stage 2 P1 uses the same number
@@ -33,11 +32,10 @@ SAVE_MODELS_FOR <- 1L          # full INLA objects saved for these imputations o
 OUT_DIR       <- if (is.null(SUBSAMPLE_N)) FIT_DIR else paste0(FIT_DIR, "_subsample")
 dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
-source(file.path(SIM_DIR, "model_fitting.R"))      # fit_inla_models(), read-only source
 source(here("R", "covariate_spec.R")); source(here("R", "04b_build_rows.R")); source(here("R", "05a_fit_funs.R"))
 RNGkind("L'Ecuyer-CMRG"); set.seed(SEED)
-fit_fun <- fit_inla_models_pc          # T5 (2026-10-26): was fit_inla_models (default prior pc.alphaw(5))
-cat(sprintf("INLA fits: alpha prior pc.alphaw(%s), one thread per fit\n", format(ALPHA_PRIOR)))
+fit_fun <- fit_inla_models_pc
+cat(sprintf("INLA fits: Weibull variant %d, N(0, %g^2) on coefficients, alpha prior pc.alphaw(%s), one thread per fit\n", WEIBULL_VARIANT, COEF_PRIOR_SD, format(ALPHA_PRIOR)))
 
 inp <- prepare_fit_inputs(TABLE_DIR, subsample_n = SUBSAMPLE_N, seed = SEED)
 saveRDS(inp$scaling, file.path(OUT_DIR, "scaling.rds"))     # needed to convert z-scaled betas back to raw units
@@ -79,7 +77,8 @@ meta_path <- file.path(OUT_DIR, sprintf("run_meta_%s.rds", RUN_TAG))
 if (!file.exists(meta_path)) saveRDS(list(time = Sys.time(), SEED = SEED, M_MI = M_MI, SIM_M = SIM_M, N_COV_SAMPLES = N_COV_SAMPLES,
   COV_CONT = COV_CONT, inla_version = as.character(utils::packageVersion("INLA")), session = utils::sessionInfo(),
   inla_args = s2$models[[k_ok]]$.args[c("family", "control.fixed", "control.family", "control.inla", "control.compute", "control.mode")],
-  fit_inla_models_src = deparse(fit_fun), ALPHA_PRIOR = ALPHA_PRIOR, rhs = inp$rhs, td = inp$td), meta_path)
+  fit_inla_models_src = deparse(fit_fun), ALPHA_PRIOR = ALPHA_PRIOR,
+  WEIBULL_VARIANT = WEIBULL_VARIANT, COEF_PRIOR_SD = COEF_PRIOR_SD, TSD_FORM = TSD_FORM, MIN_EVENTS = MIN_EVENTS, XREGEN_EXIT_RULE = XREGEN_EXIT_RULE, rhs = inp$rhs, td = inp$td), meta_path)
 
 # ---- MI loop (resumable: finished m are skipped) -------------------------------
 raw_path  <- file.path(OUT_DIR, sprintf("mi_raw_%s.csv", RUN_TAG)); diag_path <- file.path(OUT_DIR, sprintf("mi_diag_%s.csv", RUN_TAG)); err_path <- file.path(OUT_DIR, sprintf("mi_errors_%s.log", RUN_TAG))

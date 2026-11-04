@@ -7,6 +7,8 @@
 #   3. Use the first TARGET (30) valid fits per transition in increasing m (selection by index only, never by results). Stop if a transition has fewer.
 #   4. Rubin-pool estimates (pool_all) and the joint covariance (Rubin on the stored per-fit covariances, as sampled by inla.posterior.sample;
 #      no post-hoc correction of alpha's spread: the correction was tried for the "int" run and rejected, see PIPELINE_NOTES 2026-10-20).
+#   5. (WP3, B3) intercept on the YEARS scale per used fit, b0 - alpha*log(10), Rubin-pooled -> intercept_years_<tag>.csv (reporting only).
+#   6. (WP3, B6) cap_check_<tag>.csv: per transition, share of used fits with maxH_map / maxH_inla > 22.85 and median z_map_max / z_map_alpha (diagnostic).
 # Reads FIT_DIR (data-output/<tag>/fits/); outputs in RESULTS_DIR (data-output/<tag>/results/): fit_validity_<tag>.csv (every fit: screen result, used yes/no), pooled_<tag>_final.csv,
 #   pooled_<tag>_final_cov.rds (named list by transition), cov_check_<tag>.csv (sampled SD / INLA SD per fit and parameter).
 # ==============================================================================
@@ -65,6 +67,28 @@ for (mm in sort(unique(need$m))) {
     sd_i <- fx$summary_fixed[, "sd"]; names(sd_i) <- rownames(fx$summary_fixed); b <- intersect(setdiff(colnames(cv$cov), "alpha"), names(sd_i))
     chk[[length(chk) + 1L]] <- data.table(label = lb, m = mm, parameter = c(b, "alpha"), ratio_sampled_to_inla = c(sqrt(diag(cv$cov)[b]) / sd_i[b], sqrt(cv$cov["alpha", "alpha"]) / sd_a)) } }
 if (length(no_cov)) { cat("!! used fits without a usable stored covariance:\n"); print(rbindlist(no_cov)[order(label, m)]) }
+# ---- 5. B3 (reporting only): intercept on the YEARS scale, b0 - alpha*log(10), per used fit, then Rubin-pooled -----------------------------------------------
+# b0 (decade scale, variant 0) and alpha = INLA means from mi_raw; variance = var(b0) + log(10)^2 var(alpha) - 2 log(10) cov(b0, alpha) from the fit's stored
+# sampled covariance. Fits without a usable stored covariance have NA variance and drop out of the pooling (m_eff shows it). Pooling and screen stay on the decade scale.
+L10 <- log(10)
+iy <- merge(fin[parameter == "(Intercept)", .(k, label, m, b0 = est)], fin[parameter == "alpha", .(k, m, alpha = est)], by = c("k", "m"))
+iy[, est_years := b0 - alpha * L10]
+iy[, var_years := mapply(function(lb, mm) { cv <- store[[lb]][[as.character(mm)]]
+  if (is.null(cv)) return(NA_real_); C <- cv$cov; C["(Intercept)", "(Intercept)"] + L10^2 * C["alpha", "alpha"] - 2 * L10 * C["(Intercept)", "alpha"] }, label, m)]
+iy_pool <- iy[, { p <- pool_rubin(est_years, var_years); c(list(label = label[1]), as.list(p), list(se = sqrt(p$total_var))) }, by = k][order(k)]
+fwrite(iy_pool, file.path(RESULTS_DIR, sprintf("intercept_years_%s.csv", RUN_TAG)))
+cat(sprintf("\nIntercept on the years scale pooled for %d transitions -> intercept_years_%s.csv (m_eff < %d for %d)\n", nrow(iy_pool), RUN_TAG, TARGET, iy_pool[m_eff < TARGET, .N]))
+
+# ---- 6. B6 cap check: per transition, over the used fits (diagnostic, not a validity gate) --------------------------------------------------------------------
+CAP <- -log(0.001 * 2^-23)    # 22.85, as in 05a
+stopifnot("mi_raw lacks the B6 cap columns (run 05/07 of the final pipeline)" = all(c("maxH_inla", "maxH_map", "z_map_max", "z_map_alpha") %in% names(fin)))
+cap_check <- fin[parameter == "alpha", .(label = label[1], n_used = .N, n_map = sum(!is.na(maxH_map)),
+                 share_maxH_map_gt_cap = mean(maxH_map > CAP, na.rm = TRUE), share_maxH_inla_gt_cap = mean(maxH_inla > CAP, na.rm = TRUE),
+                 median_maxH_map = median(maxH_map, na.rm = TRUE), median_z_map_max = median(z_map_max, na.rm = TRUE),
+                 median_z_map_alpha = median(z_map_alpha, na.rm = TRUE)), by = k][order(k)]
+fwrite(cap_check, file.path(RESULTS_DIR, sprintf("cap_check_%s.csv", RUN_TAG)))
+cat(sprintf("Cap check -> cap_check_%s.csv: %d transitions with share_maxH_map_gt_cap > 0\n", RUN_TAG, cap_check[share_maxH_map_gt_cap > 0, .N])); print(cap_check[share_maxH_map_gt_cap > 0])
+
 cov_list <- list(); for (lb in unique(need$label)) if (length(store[[lb]]) == TARGET) cov_list[[lb]] <- pool_cov(unname(store[[lb]]))
 saveRDS(cov_list, file.path(RESULTS_DIR, sprintf("pooled_%s_final_cov.rds", RUN_TAG)))
 chk <- rbindlist(chk); fwrite(chk, file.path(RESULTS_DIR, sprintf("cov_check_%s.csv", RUN_TAG)))

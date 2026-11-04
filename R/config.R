@@ -47,8 +47,8 @@ ALPHA_PRIOR <- 0.1   # PC prior strength on the Weibull shape alpha, pc.alphaw(A
 
 # ---- final pipeline switches (WP2 / B7, 2026-11-04; spec: docs/PIPELINE_FIX_PLAN_2026-11-03.md) ----------------------------
 # Sensitivity runs change only these lines plus RUN_TAG.
-WEIBULL_VARIANT  <- 0L        # Weibull variant 0: S(t) = exp(-e^eta t^alpha); beta = log hazard ratio (used from WP3, B1)
-COEF_PRIOR_SD    <- 5         # SD of the N(0, sd^2) prior on the coefficients (S21 = 2.5; S22 = 1/sqrt(0.001)); used from WP3 (B2)
+WEIBULL_VARIANT  <- 0L        # Weibull variant 0: S(t) = exp(-e^eta t^alpha); beta = log hazard ratio (read by fit_inla_models_pc, 05a)
+COEF_PRIOR_SD    <- 5         # SD of the N(0, sd^2) prior on the coefficients (S21 = 2.5; S22 = 1/sqrt(0.001)); read by fit_inla_models_pc and fit_map_v0 (05a)
 TSD_FORM         <- "log1p"   # TSD model columns: "log1p" = log(TSD in years + 1) (main); "linear" = TSD in decades (S24)
 MIN_EVENTS       <- 15L       # transition kept with >= this many state changes; also the per-term minimum for fire / pest / harvest
                               # (light + heavy together) (S17 = 20, S23 = 10). Read by 04, 04b recount_events(), tests/04c.

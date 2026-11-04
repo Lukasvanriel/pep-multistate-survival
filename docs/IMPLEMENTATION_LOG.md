@@ -138,3 +138,41 @@ Template:
   no code change. The "table under test IS the baseline" skip in `tests/04c` only fires if RUN_TAG is set back to "main".
 - Not run: the new 04c block has only been parse-checked (no data.table in the cloud workspace). On a scratch table without the 5 WP1 plots it is
   expected to differ by those plots; on the full table it must pass.
+
+## WP3 -- B1-B6 + B7 item "recount_events() in run_stage1()" (2026-11-04) -- CODE DONE, MAC CHECKS PENDING
+- Commit: "WP3: B1-B6" (hash: see `git log`; recorded in the next commit).
+- Files / functions changed:
+  - `R/05a_fit_funs.R`: `fit_inla_models_pc` (B1/B2): `variant = WEIBULL_VARIANT`, `control.fixed = list(mean = 0, prec = 1/COEF_PRIOR_SD^2, mean.intercept = 0, prec.intercept = 0)`.
+    `tidy_fit` (B3): intercept `est` = INLA mean (decade scale), no `- log(10)`. New `v0_to_p1p2()` (B4; stops unless variant 0): intercept = b0/alpha - log 10, beta = beta/alpha.
+    `extract_theta` (posterior means) and `draw_theta_m` (per draw, own alpha) return the converted values plus the raw `intercept_dec`, `beta_v0`; `ok` also needs alpha > 0; a draw with
+    alpha <= 0 / NA falls back to the seed. `extras$theta_m` now has `alpha, intercept_dec, <raw beta columns>` (was `intercept_years` + converted beta). New: `CAP`, `fit_map_v0`, `H_at` (moved from
+    tests/22, SIGMA_B -> COEF_PRIOR_SD), `CAP_COLS`, `cap_diagnostics`, `add_cap_columns` (called in `run_one_imputation`; columns `maxH_inla, n_above_inla, maxH_map, n_above_map, z_map_max, z_map_alpha`,
+    one value per fit repeated over its rows; NA for a failed fit). `prepare_fit_inputs` returns `subsampled`. `run_stage1`: `recount_events(b$rows, inp$tr)` after `build_rows()`; skipped with a printed note when subsampling.
+  - `R/05_fit_inla.R`, `R/07_redraw.R`: `SIM_DIR` and `source(model_fitting.R)` removed; `run_meta` records `WEIBULL_VARIANT, COEF_PRIOR_SD, TSD_FORM, MIN_EVENTS, XREGEN_EXIT_RULE` (and keeps `inla_args` with control.fixed / control.family). 07 prints the full screen-reference table (all kept transitions, 90) before any candidate is fitted, then the n_ref < 10 list. Screen logic unchanged.
+  - `R/08_final_pool.R`: new `intercept_years_<tag>.csv` (per used fit: b0 - alpha log 10 from the `mi_raw` means, variance var(b0) + log10^2 var(alpha) - 2 log10 cov(b0, alpha) from the stored covariance; Rubin-pooled) and `cap_check_<tag>.csv`
+    (per transition: n_used, n_map, share maxH_map > 22.85, share maxH_inla > 22.85, medians of maxH_map, z_map_max, z_map_alpha). Pooling and screen stay on the decade scale.
+  - `R/config.R`: comments only. New tests: `R/tests/wp3_B4_check.R`, `R/tests/wp3_B6_reference_check.R` (scratch-tree harness, header explains the layout).
+- Checks run (cloud; R 4.x, data.table; no INLA):
+  - B4 mock: `Rscript R/tests/wp3_B4_check.R`: 4 transitions with different term sets, 3 random rows x t = 5/20/50: max |S0 - S1| 2.8e-16 (extract_theta), 4.4e-16 (draw_theta_m, with a fallback transition) -> ALL CHECKS PASSED.
+  - B6 reproduction: rows of tests/22 (`CAP_CUT=FALSE`, imputation 1 of the main run) built with the BASELINE 2f4382a files (covariate_spec, 04b, config RUN_TAG "main", 05a, blob hashes verified) in a scratch tree outside the project, then the NEW `fit_map_v0` / `H_at`
+    on those rows against `cap_test_new_rows_m01_nocut/results.csv` and the stored `fits/*.rds` (INLA estimates; INLA not rerun): 180 fits (arms A and B x 90): `n_above_map`, `n_above_inla`, `n_above_ev_inla` identical, no NA mismatch,
+    max relative difference `maxH_map` 6.3e-7 (arm B; arm A 4.1e-8), `alpha_map` 1.3e-8, `maxH_inla` 2.8e-13; the full MAP coefficient / SE tables of the stored fits agree to max 5.0e-6 / 9.3e-7 relative (coefficients near 0 amplify; not part of the 1e-6 criterion).
+    The tolerance was NOT loosened; the largest `maxH_map` difference is within a factor 1.6 of it.
+  - `add_cap_columns` on mock `tidy_fit` output from 3 stored INLA fits + 1 failed fit (black_spruce->regen, regen->fir, sugar_maple->regen): all six columns equal the values computed from the stored cap-test tabs; failed fit -> NA.
+  - 08 on synthetic `mi_raw` / extras (2 transitions, 31 imputations, one screened fit): `intercept_years` pooled estimate and SE equal an independent calculation; `cap_check` share 0.4 as constructed.
+  - `codetools` free-variable check of 05a + 04b + covariate_spec: nothing from model_fitting.R is needed. `run_stage1` wiring (build_rows -> recount_events -> fit_rows; skip when subsampled) tested with stubs.
+  - B7 grep (`MIN_EVENTS *<-|variant = |prec = ` in R/*.R): only config.R and `fit_inla_models_pc`.
+- Checks the user must run on the Mac (project root):
+  - `Rscript R/tests/wp3_B4_check.R inla` -> expect "ALL CHECKS PASSED", `INLA call: variant 0`, `control.fixed ... prec 0.04`. Closes the B4 unit test (one real fit, real `inla.posterior.sample` names) and shows B1/B2 on a real fit.
+  - B1/B2/B5 run-time checks come with the WP5 runs (`run_meta_final.rds`; 07 reference printout).
+- Deviations from the plan (asked and approved by the user 2026-11-04):
+  - `z_map_alpha` added to the B6 columns (alpha collapses in cap fits); `z_map_max` covers the term coefficients only. `cap_check` also has the `maxH_inla` share and medians. `run_meta` records all config switches. 07 prints the full reference table.
+  - B6 reference build from the baseline code in a scratch tree (WP2 changed the main-table columns, so tests/22 cannot run at HEAD); sensitivity/11 left for WP7.
+  - `recount_events()` is skipped when `SUBSAMPLE_N` is set.
+- Open issues for the next agent / later:
+  - NOT ticked until the Mac run: B1, B2, B4 unit test (one real fit), B5.
+  - The WP5 smoke test (SUBSAMPLE_N = 500) skips `recount_events()`, so its first real run is Stage 1 of the full imputation.
+  - `08` existing behaviour (not changed): `dcast` of the invalid-fits table stops when there are no invalid fits at all.
+  - Older diagnostics (tests 06a, 08f, 17, 23, test_fit_mock) read `extras$theta_m$intercept_years` of the main run; they were left untouched and still match the old files.
+  - `v0_to_p1p2` stops for `WEIBULL_VARIANT != 0` (a variant-1 sensitivity would need its own conversion).
+  - MAP cost per fit (about 1 s) is added to every fit in each imputation; `n_above_ev` is computed by `H_at` but not stored in `mi_raw`.
