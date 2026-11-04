@@ -190,6 +190,12 @@ if (any(na_cnt > 0)) print(head(combined[is.na(gdd_3) | is.na(cmi_gs) | is.na(so
 stopifnot("NA in gdd_3 / cmi_gs / soil_pc1 of the combined table (A1)" = !anyNA(combined[, .(gdd_3, cmi_gs, soil_pc1)]))
 
 dir.create(dirname(OUT_PATH), showWarnings = FALSE, recursive = TRUE)
+## A1 (2026-11-04): one-time safety copy of the previous combined table (never overwritten), used by R/tests/wp1_A1_check.R part B.
+bak <- sub("\\.rds$", ".pre_A1.rds", OUT_PATH)
+if (file.exists(OUT_PATH) && !file.exists(bak)) {
+  stopifnot("could not copy the pre-A1 backup" = file.copy(OUT_PATH, bak, overwrite = FALSE))
+  cat(sprintf("Backup written: %s\n", basename(bak)))
+}
 saveRDS(combined, OUT_PATH)
 cat(sprintf("Saved: %s\n", OUT_PATH))
 

@@ -35,7 +35,7 @@ Template:
     no new `plot_info` columns -- WP4 adds them). Prints the NA counts.
   - New `R/tests/wp1_A1_check.R` (read-only): new `climate_covariates.rds` vs `climate_covariates.pre_A1.rds`: NA counts, visits that differ
     (must be 0 outside the 5 plots), the 5 plots' values with same-year percentiles, the pair 7209002301 / 7209002302.
-  - Not touched: 04x, the 04 header ("expected" counts left as they are, user decision), download_zip().
+  - Not touched: 04x, download_zip(). (04's printed "expected" line was updated in the review fixes below.)
 - Checks run: no R in the workspace and no access to NRCan, so no R code was run; bracket/quote balance of the three scripts equals the committed
   versions. Cell check (Python, 1961 CMI raster cmi60_06.tif, EPSG:4269, 0.01667 deg cells): none of the 5 plots shares a cell with a checkpoint plot
   (7109604001 shares its cell only with 7109604002, which is not in the checkpoint either), so the values cannot be taken from existing plots.
@@ -44,12 +44,16 @@ Template:
   `Rscript R/04_prepare_inla.R` -> `Rscript R/04x_exclusion_flow.R`. Compare against the A1 Check items (checklist, WP1).
 - Deviations from the plan (all asked and approved by the user on 2026-11-04):
   - A1.5 NA check implemented in WP1 on the first rows of `dt2`, not deferred to WP4.
-  - Extra 03c guard (NA in gdd_3 / cmi_gs / start_gs / end_gs of used plot-years; missing plot-years) beyond the plan text.
+  - Extra 03c guard (NA in gdd_3 / cmi_gs / start_gs / end_gs of used plot-years; missing plot-years) beyond the plan text (widened to all averaged columns in the review fixes).
+  - Stricter window guard than plan A1.2/A1.4: besides `n_years_used == win_end - win_start + 1` the 03c guard also requires `n_years_used >= 1`
+    (an empty window can never pass; the user confirmed none exist, earliest visit 1970).
   - `pre_A1` backup copies made by 03c itself; extra file `R/tests/wp1_A1_check.R`.
   - Plan A1 point 6 is WRONG in its explanation: the 5 plots are NOT removed by the 03z join (they have rows with NA climate and pass the inner
     join). The 11,281 / 36,242 / 8,766 counts come from an old cloud build. 04x is to be compared with the actual 04 output (11,286 plots /
     36,251 intervals / 8,770 changes expected unchanged by A1).
 - Open issues for the next agent / later:
+  - A1.5 was done in WP1 on the first rows of `dt2` (checks gdd_3, cmi_gs, soil_pc1 at each plot's first visit). WP4 must re-add the check on the
+    first-visit columns written to `plot_info` (C1.1), because that is what P1 reads.
   - `download_zip()` (03c) is unchanged: if a download is interrupted, a partial `data.zip` stays on disk, a rerun sees the file, skips the
     download and then tries to unzip it. Proposed fix (not implemented, user decision): download to `data.zip.part` with `curl -fL -C - --retry`, check
     the size against Content-Length and `unzip(list = TRUE)`, rename only if all pass, delete the part file after repeated failure.
@@ -59,6 +63,27 @@ Template:
     unzips again on each call, so it is completed when 03c runs for that year.
   - A direct-read (`/vsizip//vsicurl/`) test was proposed and DROPPED by the user (zip entries are deflated, so random access saves little);
     nothing of it is in the project.
+
+### WP1 review fixes (2026-11-04, commit "WP1: A1 review fixes"; review of 7f5a1b6, all approved by the user)
+- `R/config.R`: `RUN_TAG <- "final"` (was "main"). 04 now writes `data/tables/final/`; `data/tables/main` and `data-output/main` stay untouched.
+  Consequences: (1) the WP6 checklist item "RUN_TAG set" is done early in config but left unticked until WP6; (2) 05, 07, 08, 09, 12 and
+  `sensitivity/10`, `11` read `data-output/final/`, which does not exist until WP6; (3) `R/tests/22_cap_test_new_rows.R`, `23_p1_onset_bench.R`,
+  `08f_failed_vs_valid.R` and `08g_bs_regen_drop_plot.R` read the MAIN run's stored draws (`extras_<RUN_TAG>_m01.rds`, `mi_raw_<RUN_TAG>`, ...) through
+  `RUN_TAG` and now stop with file-not-found. WP3 (B6 check: reproduce `cap_test_new_rows_m01_nocut`) and WP5 (comparison against it) must read the main run
+  explicitly (e.g. a separate source tag for the extras, tables of main for the old rows). Nothing was changed in those tests now.
+  The simulation scripts name `main` explicitly and are unaffected. `data/build/` has no tag (shared; differs from the main run only in the 5 plots).
+- `R/03z_combine_covariates.R`: one-time copy `combined_covariates.pre_A1.rds` before `saveRDS` (never overwritten).
+- `R/03c_build_climate_covariates.R`: the NA guard covers all averaged columns (16 sg, cmi_1-12, cmi_sum, cmi_gs; per-column NA counts printed) and `out` is
+  checked for NA in all averaged columns before `saveRDS`. Read-only check before the edit: the checkpoint (717,835 plot-years) has no NA in its 29 raw columns.
+- `R/04_prepare_inla.R`: the printed "expected" line now says: pre-A1 table, unchanged by A1: 11,286 plots, 36,251 intervals, 8,770 state changes.
+- `R/tests/wp1_A1_check.R` rewritten. Hard stops: 0 NA in the averaged columns, 0 differing visits outside the 5 plots (exact, all columns), every window full;
+  part B (only after 03z, needs `combined_covariates.pre_A1.rds`): same rows/columns, identical outside the 5 plots, 0 NA in gdd_3 / cmi_gs / soil_pc1,
+  only climate columns change in the 5 plots. FLAGS only (printed, never stop): each of the 5 plots vs its 3 nearest plots of the pre-A1 checkpoint (PEP
+  coordinates, same window) and the pair 7209002301 / 7209002302, bound = 99th percentile of the same statistic over the pool plots, same window
+  (neighbours: |value - median of the 3 nearest|; pair: |difference| of existing nearest-neighbour pairs <= 0.6 km). The check holds a COPY of `cmi_gs_matched()`
+  (the checkpoint has no cmi_gs); it validates the copy on 200 random old visits and skips the flags if the copy does not reproduce them.
+  Reference values (Python, windows 1961-70 / 1987-96): neighbour 99th percentile gdd_3 144 / 148, cmi_gs 5.4 / 4.5; pair gdd_3 86 / 86, cmi_gs 5.2 / 3.1.
+- Not run (no R in the workspace); bracket/quote balance only. The user runs: 03c -> check -> 03z -> check (adds part B) -> 04 -> 04x.
 
 ## WP2 -- A2-A11, B7 (2026-11-04) -- CODE DONE, FINAL CHECK PENDING WP1 RUN
 - Commit: "WP2: A2-A11, B7 (final check pending WP1 run)" (hash: fa1d432).

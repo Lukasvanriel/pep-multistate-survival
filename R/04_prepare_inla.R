@@ -137,7 +137,7 @@ stopifnot("NA in gdd_3 / cmi_gs / soil_pc1 of the visit intervals (A1)" = !anyNA
 stopifnot(all(iv$t_end - iv$t_start == iv$year_end - iv$year_start))
 cat(sprintf("\nVisit-interval table: %d intervals, %d plots, %d with a state change\n",
             nrow(iv), uniqueN(iv$id_pe), sum(iv$is_change)))
-cat("  (expected: 8881 state changes over all 11,393 plots; 8880 after the 47 excluded plots; 36,508 intervals, 11,346 plots)\n")
+cat("  (expected = the pre-A1 table, unchanged by A1: 11,286 plots, 36,251 intervals, 8,770 state changes)\n")
 cat("  gap between visits (years):\n"); print(summary(iv$t_end - iv$t_start))
 cat("  plots with no interval (single visit):",
     sum(!wj[include == TRUE, id_pe] %in% iv$id_pe), "\n")

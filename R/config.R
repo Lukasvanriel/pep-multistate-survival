@@ -6,7 +6,7 @@
 # Sourced by: 02, 03, 03b, 03c, 03z, 04, 05, 07_redraw, 08, 09, 12, R/sensitivity/10, 11, R/tests/04c.
 # Switches for the full-run sensitivities (TSD_SOURCE, prior strength, TSD form, MIN_EVENTS, ...) are in this file; see the end.
 # ==============================================================================
-RUN_TAG <- "main"   # run tags: noint (archived), inttest, main -- see PIPELINE_NOTES "Run tags"
+RUN_TAG <- "final"  # run tags: noint (archived), inttest, main (previous main run: keep data/tables/main and data-output/main untouched), final (2026-11-04: final pipeline) -- see PIPELINE_NOTES "Run tags"
 
 # ---- prep side (data/) --------------------------------------------------------
 # data/raw/ = inputs, never written by the pipeline (except the 03c download scratch data/raw/climate_raw/)

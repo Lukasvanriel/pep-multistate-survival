@@ -315,18 +315,21 @@ cat(sprintf("\nGS-matched CMI: %d plot-years, %d NA (missing season dates or in-
 rm(gsm)
 
 ## A1 guard (2026-11-04): every needed plot-year must be present (a failed download is not skipped silently) and have no NA in the
-## four variables that define gdd_3 and cmi_gs. mean(na.rm = TRUE) in step 5 would otherwise average fewer years without a signal.
+## averaged columns (not only gdd_3 / cmi_gs). mean(na.rm = TRUE) in step 5 would otherwise average fewer years without a signal.
 used <- long_dt[need, on = c("id_pe", "year"), nomatch = NULL]
 if (nrow(used) != nrow(need)) {
   print(need[!long_dt[, .(id_pe, year)], on = c("id_pe", "year")][, .(n_years = .N, from = min(year), to = max(year)), by = id_pe])
   stop(sprintf("A1: %d needed plot-years are missing from the extraction (failed download?). Rerun 03c.", nrow(need) - nrow(used)))
 }
-na_used <- used[is.na(gdd_3) | is.na(cmi_gs) | is.na(start_gs) | is.na(end_gs), .(id_pe, year, gdd_3, cmi_gs, start_gs, end_gs)]
-if (nrow(na_used) > 0) {
-  print(head(na_used, 30))
-  stop(sprintf("A1: %d used plot-years have NA in gdd_3 / cmi_gs / start_gs / end_gs (%d plots).", nrow(na_used), uniqueN(na_used$id_pe)))
+vcols <- setdiff(names(long_dt), c("id_pe", "year"))     # every column that step 5 averages (16 sg, cmi_1-12, cmi_sum, cmi_gs)
+na_by_col <- colSums(is.na(used[, ..vcols]))
+if (any(na_by_col > 0)) {
+  cat("NA per column among the used plot-years:\n"); print(na_by_col[na_by_col > 0])
+  bad_py <- used[rowSums(is.na(used[, ..vcols])) > 0, .(id_pe, year)]
+  print(head(bad_py, 30))
+  stop(sprintf("A1: %d used plot-years have NA in the averaged columns (%d plots).", nrow(bad_py), uniqueN(bad_py$id_pe)))
 }
-cat(sprintf("A1 guard: all %d needed plot-years present, 0 NA in gdd_3 / cmi_gs / start_gs / end_gs.\n", nrow(used)))
+cat(sprintf("A1 guard: all %d needed plot-years present, 0 NA in the %d averaged columns.\n", nrow(used), length(vcols)))
 rm(used)
 
 ## ---- 5. per-visit truncated trailing average -----------------------------
@@ -371,6 +374,9 @@ if (nrow(bad) > 0) {
   stop(sprintf("A1: %d plot-visits do not have n_years_used == win_end - win_start + 1 (>= 1). climate_covariates.rds NOT written.", nrow(bad)))
 }
 cat(sprintf("A1 guard: all %d plot-visits have n_years_used == window length.\n", nrow(out)))
+na_out <- colSums(is.na(out[, ..value_cols]))
+if (any(na_out > 0)) { print(na_out[na_out > 0]); stop("A1: NA in the averaged columns of the visit table. climate_covariates.rds NOT written.") }
+cat(sprintf("A1 guard: 0 NA in the %d averaged columns of the %d visits.\n", length(value_cols), nrow(out)))
 
 saveRDS(out, OUT_PATH)
 cat(sprintf("\nSaved: %s\n", OUT_PATH))
