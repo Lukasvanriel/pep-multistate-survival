@@ -61,7 +61,7 @@ Template:
     nothing of it is in the project.
 
 ## WP2 -- A2-A11, B7 (2026-11-04) -- CODE DONE, FINAL CHECK PENDING WP1 RUN
-- Commit: "WP2: A2-A11, B7 (final check pending WP1 run)" (hash: see `git log`; a follow-up commit records it in the checklist).
+- Commit: "WP2: A2-A11, B7 (final check pending WP1 run)" (hash: fa1d432).
 - Files / functions changed:
   - `R/config.R`: new switches `WEIBULL_VARIANT <- 0L`, `COEF_PRIOR_SD <- 5`, `TSD_FORM <- "log1p"`, `MIN_EVENTS <- 15L`, `XREGEN_EXIT_RULE <- TRUE`
     (WEIBULL_VARIANT, COEF_PRIOR_SD, XREGEN_EXIT_RULE are defined only; used from WP3 / WP5). `LOW_EVENTS_MAX` NOT added (WP7, user decision).

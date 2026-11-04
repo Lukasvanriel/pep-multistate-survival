@@ -26,7 +26,7 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] User ran on the Mac: 03c -> 03z -> 04 -> 04x
 - [ ] Check: 0 NA climate; all other visits identical to the previous `climate_covariates.rds`; 04 plots/intervals/events unchanged; 5 plots plausible (7209002301 ~ 7209002302); 04x matches 04
 
-## WP2 -- A2-A11, B7 (04, covariate_spec.R, config.R, 04b, tests/04c)   Commit: ______   Review: [ ]
+## WP2 -- A2-A11, B7 (04, covariate_spec.R, config.R, 04b, tests/04c)   Commit: fa1d432   Review: [ ]
 - [x] A2 harvest: light + heavy only, never "any" (04, covariate_spec, recount_events, tests/04c)  -- *69 of 69 harvest terms on scratch (17 + 21 + 31 -> "3level"); no `harv_any`/`tsd_harv` left in the WP2 files or 05a*
 - [x] A3 fire/pest rule unchanged (MIN_EVENTS from config)  -- *fire 14, pest 28 on scratch; transition_set counts and terms identical to the 7f5a1b6 baseline on the same table*
 - [x] A4 tsd_harv_light / tsd_harv_heavy  -- *04c: at most one harvest TSD non-zero per interval; 0 where the level flag is 0*
