@@ -13,7 +13,8 @@
 #   main effects : z_gdd_3, z_cmi_gs, z_soil_pc1, fire_f, pest_f, harv_light + harv_heavy (harv_term "3level" = light and heavy
 #                  each vs none; there is no "any" level since A2, 2026-11-04).
 #                  z_gdd_3 is dropped where a transition has no undisturbed event (A11, n_undist == 0 and >= 1 disturbance term).
-#   GDD x disturbance (":" products, main effects both present; GDD only, not CMI):
+#   GDD x disturbance (":" products; GDD only, not CMI). The GDD main effect is present except in A11 transitions (z_gdd_3 dropped):
+#                  there the product is the GDD slope WITHIN the disturbance level (unharvested / unburned slope assumed 0, untestable):
 #                  gdd_x_fire, gdd_x_pest, gdd_x_harv_light, gdd_x_harv_heavy = z_gdd_3 * flag.
 #                  Wherever the disturbance main term exists; for a harvest LEVEL with 0 events the main term only (A6).
 #   TSD (one per disturbance type; harvest per LEVEL, A4): tsd_fire, tsd_pest, tsd_harv_light, tsd_harv_heavy.

@@ -82,6 +82,7 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] D6 tests/08f: fit_map_v0 / H_at, new mask, no NA-row dropping, B6 columns
 - [ ] D7 sensitivity/10 (n_dist per level, MIN_EVENTS_S1 from config, no alpha_cov_low_share) and 11 (variant 0, control.fixed, intercept scale, exp(beta), A11)
 - [ ] D8 09 for transitions without z_gdd_3
+- [ ] 09: `LOW_EVENTS_MAX <- MIN_EVENTS + 4L` (moved from B7)
 - [ ] User ran on the Mac: 09 -> 12 -> 10 -> 11; every 12 block has k > 0
 
 ## Outside the code

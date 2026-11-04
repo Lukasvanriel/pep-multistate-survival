@@ -118,6 +118,35 @@ cat("  A11: transitions without z_gdd_3: ", paste(lab[!m[, "z_gdd_3"]], collapse
 if ("regen->sugar_maple" %in% lab) ok("A11: regen->sugar_maple has no z_gdd_3 but keeps gdd_x_harv_light / heavy", !m["regen->sugar_maple", "z_gdd_3"] && all(m["regen->sugar_maple", c("gdd_x_harv_light", "gdd_x_harv_heavy")]))
 ok("A11: n_undist <= n_events for every transition", all(tr$n_undist <= tr$n_events))
 
+# Comparison with the pre-WP2 04 output (data/tables/main/transition_set.rds): transitions, events, fire and pest terms must not change.
+cat("\n  Baseline comparison with data/tables/main/transition_set.rds (WP2 Check: only harvest terms and the A11 z_gdd_3 may change)\n")
+base_f <- here::here("data", "tables", "main", "transition_set.rds")
+if (!file.exists(base_f)) {
+  cat("  NOTE: baseline not found -> comparison SKIPPED\n")
+} else if (normalizePath(base_f) == normalizePath(file.path(proc_dir, "transition_set.rds"))) {
+  cat("  NOTE: the table under test IS the baseline file (04 overwrote it, or no copy was made) -> comparison SKIPPED; copy the pre-WP2 table elsewhere first\n")
+} else {
+  tb <- as.data.table(readRDS(base_f))
+  cols <- c("n_events", "n_fire", "n_pest", "n_harv0", "n_harv1", "n_harv2", "fire_term", "pest_term")
+  kb <- tb[kept == TRUE, c("from", "to", cols), with = FALSE]; kn <- tr[kept == TRUE, c("from", "to", cols), with = FALSE]
+  setorder(kb, from, to); setorder(kn, from, to)
+  cat(sprintf("  baseline kept transitions %d, new %d (new table has %d plots / %d intervals in visit_intervals; baseline-equal totals expected only on the full table)\n",
+              nrow(kb), nrow(kn), uniqueN(iv$id_pe), nrow(iv)))
+  kk <- function(x) x[, paste(from, to)]
+  cat("  kept only in baseline: ", paste(setdiff(kk(kb), kk(kn)), collapse = ", "), " | kept only in new: ", paste(setdiff(kk(kn), kk(kb)), collapse = ", "), "\n", sep = "")
+  ok("baseline: same set of kept transitions", identical(kb[, paste(from, to)], kn[, paste(from, to)]))
+  dif <- vapply(cols, function(cc) sum(kb[[cc]] != kn[[cc]]), integer(1))
+  cat("  differing transitions per column (baseline vs new):\n"); print(dif)
+  if (any(dif > 0)) print(merge(kb, kn, by = c("from", "to"), suffixes = c("_old", "_new"))[
+    Reduce(`|`, lapply(cols, function(cc) get(paste0(cc, "_old")) != get(paste0(cc, "_new"))))])
+  ok("baseline: n_events, n_fire, n_pest, n_harv0/1/2, fire_term, pest_term identical for all kept transitions", all(dif == 0))
+  hh <- merge(tb[kept == TRUE, .(from, to, harv_old = harv_term)], tr[kept == TRUE, .(from, to, harv_new = harv_term)], by = c("from", "to"))
+  cat(sprintf("  harvest term changed in %d of %d kept transitions:\n", hh[harv_old != harv_new, .N], nrow(hh)))
+  print(hh[harv_old != harv_new, .N, by = .(harv_old, harv_new)])
+  cat("  transitions listed:\n"); print(hh[harv_old != harv_new])
+  cat("  transitions that lost z_gdd_3: ", paste(lab[!m[, "z_gdd_3"]], collapse = ", "), "\n", sep = "")
+}
+
 sc <- make_scaling(iv)
 dm <- add_model_covariates(iv, sc); dl <- add_model_covariates(iv, sc, tsd_form = "linear")
 ok("A4: at most one of tsd_harv_light / tsd_harv_heavy is non-zero per interval", all(dm$tsd_harv_light == 0 | dm$tsd_harv_heavy == 0))
