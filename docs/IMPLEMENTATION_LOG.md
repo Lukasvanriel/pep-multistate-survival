@@ -200,7 +200,7 @@ Template:
 - WP3 review ticked.
 
 ## WP4 -- C1, C5 (2026-11-04) -- CODE DONE, MAC CHECKS PENDING
-- Commit: "WP4: C1, C5" (hash: see `git log`; recorded in a following docs commit). Author Lukas Van Riel as in the earlier commits.
+- Commit: "WP4: C1, C5" (hash c2b2b46). Author Lukas Van Riel as in the earlier commits.
 - User decisions before the work (2026-11-04): (1) yearly grid from the first onset, last piece cut at W_j with the midpoint of the shortened piece; (2) EXTRA breakpoint at the exact
   onset of a later type (piece splits in two, each with TSD at its own midpoint) -- DEVIATION from "yearly pieces" in the plan (C1.5); (3) time since entry stays the clock when lambda
   changes; (4) the "same candidates" check = new code vs the WP3 `p1_candidates` fed the same base-row lambda; (5) the user's own toy for C5; (6) the real-data shift as a test script run in WP5
@@ -239,3 +239,4 @@ Template:
   - A flagged plot with TSD 0 (onset = W_j) has its flag off for the whole of P1's history (C1.3); its P1 row is X0.
   - `tests/23_p1_onset_bench.R` (benchmark prototype) and older diagnostics that read `inp$X` were not touched.
   - A plot starting in regen with no change observed keeps entry 0 even when no transition is ok (same as the WP3 code).
+- Git note: the WP4 commits left `.git/HEAD.lock` / `.git/index.lock` and a few `tmp_obj_*` files that the sandbox may not delete; the stale locks were moved to `.git/stale-*-wp4*` (safe to delete), the `tmp_obj_*` files are unreferenced leftovers (safe to delete).
