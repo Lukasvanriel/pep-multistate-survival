@@ -140,7 +140,7 @@ Template:
   expected to differ by those plots; on the full table it must pass.
 
 ## WP3 -- B1-B6 + B7 item "recount_events() in run_stage1()" (2026-11-04) -- CODE DONE, MAC CHECKS PENDING
-- Commit: "WP3: B1-B6" (hash: see `git log`; recorded in the next commit).
+- Commit: "WP3: B1–B6" (hash 4237012). Committed with the repository's existing author identity (the VM has no git identity); trailers name Claude.
 - Files / functions changed:
   - `R/05a_fit_funs.R`: `fit_inla_models_pc` (B1/B2): `variant = WEIBULL_VARIANT`, `control.fixed = list(mean = 0, prec = 1/COEF_PRIOR_SD^2, mean.intercept = 0, prec.intercept = 0)`.
     `tidy_fit` (B3): intercept `est` = INLA mean (decade scale), no `- log(10)`. New `v0_to_p1p2()` (B4; stops unless variant 0): intercept = b0/alpha - log 10, beta = beta/alpha.

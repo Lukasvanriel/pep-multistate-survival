@@ -41,7 +41,7 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] User ran on the Mac: 04 and tests/04c
 - [ ] Check (implementation step 2): only harvest terms (A2, A4, A6) and regen->sugar_maple's GDD main term (A11) change; transitions, events, fire and pest terms identical; 69 harvest terms; 1,537 X->regen intervals with D_heavy
 
-## WP3 -- B1-B6 (05a fit + theta, 05, 07, 08)   Commit: ______   Review: [ ]
+## WP3 -- B1-B6 (05a fit + theta, 05, 07, 08)   Commit: 4237012   Review: [ ]
 - [ ] B1 variant from config in every INLA call; SIM_DIR / model_fitting.R source removed from 05 and 07; run_meta records it  -- *code done (05a, 05, 07; sensitivity/11 is WP7); check `run_meta$inla_args$control.family$variant == 0` needs a 05 run on the Mac (wp3_B4_check.R inla checks the same on one real fit)*
 - [ ] B2 control.fixed: N(0, COEF_PRIOR_SD^2), flat intercept  -- *code done; check (run_meta shows the values) pending the Mac run; wp3_B4_check.R inla asserts them on one real fit*
 - [x] B3 intercept kept on INLA's (decade) scale in tidy_fit / mi_raw / screen / pooling; years-scale intercept computed in 08 (reporting only)  -- *no `- log(10)` left on the INLA estimates (only `v0_to_p1p2` for P1/P2); 08 `intercept_years_<tag>.csv` matches an independent calculation on synthetic fits*
