@@ -8,7 +8,7 @@
 #   4. Rubin-pool estimates (pool_all) and the joint covariance (Rubin on the stored per-fit covariances, as sampled by inla.posterior.sample;
 #      no post-hoc correction of alpha's spread: the correction was tried for the "int" run and rejected, see PIPELINE_NOTES 2026-10-20).
 #   5. (WP3, B3) intercept on the YEARS scale per used fit, b0 - alpha*log(10), Rubin-pooled -> intercept_years_<tag>.csv (reporting only).
-#   6. (WP3, B6) cap_check_<tag>.csv: per transition, share of used fits with maxH_map / maxH_inla > 22.85 and median z_map_max / z_map_alpha (diagnostic).
+#   6. (WP3, B6) cap_check_<tag>.csv: per transition, share of used fits with maxH_map / maxH_inla > 22.85 and median z_map_max / z_map_alpha / z_map_intercept (diagnostic).
 # Reads FIT_DIR (data-output/<tag>/fits/); outputs in RESULTS_DIR (data-output/<tag>/results/): fit_validity_<tag>.csv (every fit: screen result, used yes/no), pooled_<tag>_final.csv,
 #   pooled_<tag>_final_cov.rds (named list by transition), cov_check_<tag>.csv (sampled SD / INLA SD per fit and parameter).
 # ==============================================================================
@@ -28,6 +28,7 @@ pool_cov <- function(covs) {
 files <- file.path(OUT_DIR, sprintf(c("mi_raw_%s.csv", "mi_raw_redraw_%s.csv"), RUN_TAG)); files <- files[file.exists(files)]
 raw <- rbindlist(lapply(files, fread), fill = TRUE)
 stopifnot(!anyDuplicated(raw[, .(k, m, parameter)]))
+stopifnot("mi_raw lacks the B6 cap columns (run 05/07 of the final pipeline)" = all(c("maxH_inla", "n_above_inla", "maxH_map", "n_above_map", "z_map_max", "z_map_alpha", "z_map_intercept") %in% names(raw)))   # before any computation or output
 cat(sprintf("Fits pulled: %d (imputation x transition) from %d imputations, %d transitions\n", uniqueN(raw[, .(k, m)]), uniqueN(raw$m), uniqueN(raw$k)))
 
 # ---- 2. frozen screen on every fit ----------------------------------------------------------------------------------------------------------------------
@@ -81,11 +82,10 @@ cat(sprintf("\nIntercept on the years scale pooled for %d transitions -> interce
 
 # ---- 6. B6 cap check: per transition, over the used fits (diagnostic, not a validity gate) --------------------------------------------------------------------
 CAP <- -log(0.001 * 2^-23)    # 22.85, as in 05a
-stopifnot("mi_raw lacks the B6 cap columns (run 05/07 of the final pipeline)" = all(c("maxH_inla", "maxH_map", "z_map_max", "z_map_alpha") %in% names(fin)))
 cap_check <- fin[parameter == "alpha", .(label = label[1], n_used = .N, n_map = sum(!is.na(maxH_map)),
                  share_maxH_map_gt_cap = mean(maxH_map > CAP, na.rm = TRUE), share_maxH_inla_gt_cap = mean(maxH_inla > CAP, na.rm = TRUE),
                  median_maxH_map = median(maxH_map, na.rm = TRUE), median_z_map_max = median(z_map_max, na.rm = TRUE),
-                 median_z_map_alpha = median(z_map_alpha, na.rm = TRUE)), by = k][order(k)]
+                 median_z_map_alpha = median(z_map_alpha, na.rm = TRUE), median_z_map_intercept = median(z_map_intercept, na.rm = TRUE)), by = k][order(k)]
 fwrite(cap_check, file.path(RESULTS_DIR, sprintf("cap_check_%s.csv", RUN_TAG)))
 cat(sprintf("Cap check -> cap_check_%s.csv: %d transitions with share_maxH_map_gt_cap > 0\n", RUN_TAG, cap_check[share_maxH_map_gt_cap > 0, .N])); print(cap_check[share_maxH_map_gt_cap > 0])
 

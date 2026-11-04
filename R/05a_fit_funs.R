@@ -348,9 +348,9 @@ H_at <- function(d, terms, tab) {       # cumulative hazard at the truncation ti
   H <- exp(est[["(Intercept)"]] + drop(X %*% est[terms])) * d$truncation^est[["alpha"]]
   c(maxH = max(H), n_above = sum(H > CAP), n_above_ev = sum(H > CAP & d$status == 1L))
 }
-CAP_COLS <- c("maxH_inla", "n_above_inla", "maxH_map", "n_above_map", "z_map_max", "z_map_alpha")
+CAP_COLS <- c("maxH_inla", "n_above_inla", "maxH_map", "n_above_map", "z_map_max", "z_map_alpha", "z_map_intercept")
 # One fit: d = its fitting data (data.frame), tms = its terms, tab = tidy_fit rows of the fit (parameter, est, sd; INLA means). Returns the
-# CAP_COLS values. z_map_max = largest |INLA - MAP| / MAP SE over the term coefficients (not alpha, not the intercept); z_map_alpha the same for alpha.
+# CAP_COLS values. z_map_max = largest |INLA - MAP| / MAP SE over the term coefficients (not alpha, not the intercept); z_map_alpha and z_map_intercept the same for alpha and for the intercept.
 # NA for a failed INLA fit or a failed MAP.
 cap_diagnostics <- function(d, tms, tab) {
   na <- setNames(rep(NA_real_, length(CAP_COLS)), CAP_COLS)
@@ -361,7 +361,8 @@ cap_diagnostics <- function(d, tms, tab) {
   z <- merge(tab[, .(parameter, inla = est)], fm$tab[, .(parameter, map = est, se = sd)], by = "parameter")[, z := abs(inla - map) / se]
   zmax <- function(x) if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE)
   c(maxH_inla = hi[["maxH"]], n_above_inla = hi[["n_above"]], maxH_map = hm[["maxH"]], n_above_map = hm[["n_above"]],
-    z_map_max = zmax(z[!parameter %in% c("alpha", "(Intercept)"), z]), z_map_alpha = zmax(z[parameter == "alpha", z]))
+    z_map_max = zmax(z[!parameter %in% c("alpha", "(Intercept)"), z]), z_map_alpha = zmax(z[parameter == "alpha", z]),
+    z_map_intercept = zmax(z[parameter == "(Intercept)", z]))
 }
 
 # Adds the CAP_COLS columns to tidy_fit() output: one value per fit (k), repeated over its parameter rows. data_list[[j]] = fitting data of transition ks[j].
