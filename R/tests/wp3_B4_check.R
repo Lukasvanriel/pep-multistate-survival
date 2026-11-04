@@ -81,9 +81,13 @@ if (RUN_INLA) {
   mods <- fit_inla_models_pc(list(d), "z_gdd_3 + z_cmi_gs", exact = TRUE)
   stopifnot(is.null(mods[[1]]$error))
   a1 <- mods[[1]]$.args; cf <- a1$control.fixed     # what INLA was actually given
-  cfg <- data.table(setting = c("control.family$variant", "control.fixed$mean", "control.fixed$prec", "control.fixed$mean.intercept", "control.fixed$prec.intercept"),
-                    value = c(a1$control.family$variant, cf$mean, cf$prec, cf$mean.intercept, cf$prec.intercept),
-                    expected = c(0, 0, 1 / COEF_PRIOR_SD^2, 0, 0))
+  # .args$control.family is a LIST OF ONE per-likelihood list: the variant is at control.family[[1]]$variant (found on the Mac, 2026-11-04)
+  got <- list("control.family[[1]]$variant" = a1$control.family[[1]]$variant, "control.fixed$mean" = cf$mean, "control.fixed$prec" = cf$prec,
+              "control.fixed$mean.intercept" = cf$mean.intercept, "control.fixed$prec.intercept" = cf$prec.intercept)
+  bad <- names(got)[!vapply(got, function(x) length(x) == 1L && is.numeric(x) && !is.na(x), logical(1))]   # a missing (NULL) value must stop, never be dropped by c()
+  if (length(bad)) fail(sprintf("setting(s) not found in the INLA call (length != 1 or not numeric): %s", paste(bad, collapse = ", ")),
+                        data.table(setting = names(got), length = lengths(got), names_control_family = paste(names(a1$control.family), collapse = "/")))
+  cfg <- data.table(setting = names(got), value = unlist(got), expected = c(WEIBULL_VARIANT, 0, 1 / COEF_PRIOR_SD^2, 0, 0))
   cfg[, ok := !is.na(value) & abs(value - expected) < 1e-12]; cat("INLA settings of the fit (B1/B2):\n"); print(cfg)
   if (!all(cfg$ok)) fail("INLA was not given the expected variant / control.fixed", cfg)
   inp1 <- list(td = data.table(label = "a->b"), mask = matrix(TRUE, 1, 2, dimnames = list("a->b", names(bt))), terms = names(bt))
