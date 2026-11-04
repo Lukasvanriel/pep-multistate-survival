@@ -28,6 +28,7 @@
 library(sf)
 library(data.table)
 library(here)
+source(here::here("R", "config.R"))   # project paths (data/build etc.)
 PEP_PATH <- here("data", "raw", "pep", "PEP.gpkg")
 
 # ==============================================================================
@@ -232,7 +233,7 @@ classified <- merge(meas_full[, .(id_pe, no_mes, total_ba, year)],
                     by = c("id_pe", "no_mes"),
                     all.x = TRUE)
 classified[, state := fcase(
-  total_ba < 5,            "regen",
+  total_ba < BA_REGEN,     "regen",   # BA_REGEN from R/config.R (5 m2/ha, Brice et al. 2020)
   !is.na(dominant_state),  dominant_state,
   default =                "unclassified_species"
 )]
@@ -266,7 +267,7 @@ cat(sprintf("\nTotal retained: %d plot-measurements, %d plots\n",
 # 11. SAVE
 # ==============================================================================
 out <- classified[, .(id_pe, no_mes, state, total_ba)]
-dir.create("data/processed/", showWarnings = FALSE, recursive = TRUE)
-saveRDS(out, "data/processed/state_classification.rds")
-cat("\nSaved: data/processed/state_classification.rds\n")
+dir.create(BUILD_DIR, showWarnings = FALSE, recursive = TRUE)
+saveRDS(out, file.path(BUILD_DIR, "state_classification.rds"))
+cat("\nSaved: data/build/state_classification.rds\n")
 cat(sprintf("  %d plot-measurements\n", nrow(out)))

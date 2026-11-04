@@ -109,13 +109,14 @@
 #     - This axis explains less raw variance than PC1, but is the one
 #       that actually lines up with the species-performance mechanism.
 #
-# Output: data/covariates/pep/soil_covariates.rds
+# Output: data/build/soil_covariates.rds
 # ==============================================================================
 
 library(sf)
 library(data.table)
 library(here)
 
+source(here::here("R", "config.R"))   # project paths (data/build etc.)
 PEP_PATH <- here("data", "raw", "pep", "PEP.gpkg")
 
 # ==============================================================================
@@ -349,11 +350,8 @@ cat(sprintf("Rows filled via PC-axis nearest donor: %d / %d\n",
 out <- dt[, .(id_pe, no_mes, id_pe_mes, year, ph_humus, drainage_ordinal,
               soil_pc1, soil_pc2, soil_pc_source, soil_pc_donor_id_pe, soil_pc_donor_dist_km)]
 
-out_path <- here("data", "covariates", "pep", "soil_covariates.rds")
+dir.create(BUILD_DIR, showWarnings = FALSE, recursive = TRUE)
+out_path <- file.path(BUILD_DIR, "soil_covariates.rds")
 dir.create(dirname(out_path), showWarnings = FALSE, recursive = TRUE)
 saveRDS(out, out_path)
 cat(sprintf("\nSaved %d rows to %s\n", nrow(out), out_path))
-
-# ==============================================================================
-# STEP 7. CLIMATE COVARIATES -- TODO
-# ==============================================================================

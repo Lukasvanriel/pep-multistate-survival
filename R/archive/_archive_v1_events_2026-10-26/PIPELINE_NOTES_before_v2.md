@@ -1,0 +1,1084 @@
+# PEP multistate pipeline: decisions, order, status
+Last updated 2026-10-24. Simulation folder `p1p2_v2_test` is FINISHED and READ-ONLY: never modify it.
+**START HERE: the current to-do list is "FINAL HANDOFF LIST v5" at the END of this file; it supersedes every earlier list and "Open / to decide".**
+All new work lives in this project (`pep-multistate-survival`).
+
+## Folder structure of R/ (reorganised 2026-10-24)
+- `R/` = MAIN PIPELINE only, run from the project root in this order:
+  `02_classify_states.R` -> `03_build_covariates.R` -> `03b_build_soil_climate_covariates.R` (soil only) -> `03c_build_climate_covariates.R`
+  -> `03z_combine_covariates.R` -> `04_prepare_inla.R` -> `05_fit_inla.R` -> `07_redraw.R` -> `08_final_pool.R` -> `09_hazard_ratios.R`
+  -> `12_cross_transition_synthesis.R`. Function files (sourced, not run): `covariate_spec.R`, `04b_build_rows.R`, `05a_fit_funs.R`;
+  plus the simulation's read-only `model_fitting.R` (sourced by 05 / 07_redraw).
+- `R/sensitivity/` = sensitivity analyses that feed the paper: `10_sensitivity_posthoc.R`, `11_within_between_climate.R` (new S-scripts go here).
+- `R/tests/` = checks and diagnostics, never needed for the main results (06a-06z still use the OLD data/processed/ paths and were not updated): `04c_check_rows.R`, `test_split_vs_collapsed.R`, `test_fit_mock.R`,
+  `06a`-`06z` (INLA failure investigations, diag/int era), `13`-`21` (2026-10-22/23 diagnostics; need the int tables).
+- `R/archive/` = superseded: `07_redraw_failed.R`, `07_redraw_failed_wholeimputation.R`, `07b_bsregen_sweep.R`, `07c_bsregen_cov.R` (int run only),
+  `06_inspect_plot.R` (empty stub), `_archive_pre_gs/` (copies of scripts before the gs change).
+- Run any script from the project root (`Rscript R/<folder>/<script>.R`); all sourcing goes through here("R", ...), so moved scripts still find
+  the function files. Script numbers are historical (no 06, 10, 11 in R/ any more); a front-to-end driver 00_run_all.R does not exist yet.
+
+## Run tags and folder layout (2026-10-24, user-decided) -- READ THIS BEFORE ANY PATH IN THE DATED SECTIONS BELOW
+Rule (user): everything up to the INLA input lives in data/; everything INLA produces and later scripts use lives in data-output/<tag>/.
+All paths are defined once in R/config.R (RUN_TAG + directories).
+Run tags:
+- `noint`: main-effects model, annual CMI, default alpha prior (2026-10-15; was data/processed/fit/). Superseded -> _archive/noint/fits/.
+- `inttest`: first run with GDD x disturbance interactions + TSD, annual CMI (cmi_sum), default prior pc.alphaw(5) (2026-10-20; was "int").
+  Its files keep the "_int" suffix inside (extras_int_mXX.rds, fit_validity_int.csv ...). Diagnostics 13-21 use it.
+- `main`: the final run (was planned as "gs"; never run under that name). Full-run sensitivities get role tags (e.g. S10_startflags,
+  S11_tsd_lower, S11_tsd_upper), set via RUN_TAG in R/config.R.
+Layout:
+  data/raw/                         inputs (PEP.gpkg ...); data/raw/climate_raw/ = 03c download scratch
+  data/build/                       02-03z outputs: state_classification, disturbance/soil/climate covariates, climate_by_year_raw, combined_covariates
+  data/build/summaries/             03z summary CSVs + transition_intensity_matrix.png
+  data/tables/<tag>/                04 output (= INLA input): visit_intervals, plot_info, transition_set (.rds + .csv), wj_table, tsd_excluded_plots
+  data/diagnostics/                 prep-side diagnostics (pep_codes_both_layers.csv)
+  data-output/<tag>/fits/           05 + 07_redraw: stage1/2, scaling, extras_m*, mi_raw*, mi_diag*, screen_ref, errors
+  data-output/<tag>/results/        08 (fit_validity, pooled_final + cov, cov_check), 09 (hazard ratios), 12 (synthesis)
+  data-output/<tag>/sensitivity/    10 (sens_*), 11 (wb/), later S-refits
+  data-output/<tag>/figures/        (none yet)
+  data-output/diagnostics/          INLA-side diagnostics not tied to one run (16/17 H(tr) simulation: htr_grid/, htr_sim_*.csv)
+  _archive/                         noint/fits, inttest_untagged_tables (byte-identical duplicates of data/tables/inttest), tmp_debris
+  git: data/build, data/tables, data/diagnostics, data-output/*/{fits,results,sensitivity}, data-output/diagnostics, _archive are ignored.
+Exception: inttest is NOT split into fits/results -- all its files (incl. fit_validity_int, pooled_int_final, hazard_ratios_int) sit in
+  data-output/inttest/fits/. So 08-12 cannot be rerun on inttest by setting RUN_TAG (not needed).
+Old -> new path map (dated sections below use the old paths):
+  data/processed/fit/                  -> _archive/noint/fits/
+  data/processed/fit_int/              -> data-output/inttest/fits/
+  data/processed/fit_wb/               -> data-output/inttest/sensitivity/wb/
+  data/processed/{tables_int,int_tables}/ and data/processed/<table>.rds  -> data/tables/inttest/ (untagged copies -> _archive/inttest_untagged_tables/)
+  data/processed/state_classification.rds, combined_covariates.rds        -> data/build/
+  data/covariates/pep/*.rds            -> data/build/
+  data/processed/diagnostics/pep_codes_both_layers.csv                     -> data/diagnostics/
+  data/processed/diagnostics/htr_*     -> data-output/diagnostics/
+  data-output/data/*.csv (03z)         -> data/build/summaries/;  data-output/data/transition_set.csv (int) -> data/tables/inttest/
+  data/climate_raw/                    -> data/raw/climate_raw/
+  data-output/tmp_*, data-output/_r_test_tmp/ -> _archive/tmp_debris/
+Planned names fit_main/, tables_main/, fit_wb_<tag>/ in the T0 log below are superseded by this layout.
+
+## Goal
+Adapt the validated simulation pipeline (P1 entry imputation, P2 exit imputation, per-transition INLA
+Weibull fits, Rubin pooling; orchestrated by `fit_p1p2_combined.R`) to the real PEP data.
+No truth exists: no bias/coverage evaluation, no bias correction, no oracle columns (`true_*`), no hidden hops.
+
+## Order (strict)
+A. Data preparation (no imputation) - script `R/04_prepare_inla.R`
+   1. W_j per plot  2. visit-interval table  3. transition set + covariate terms
+B. Imputation + fitting (simulation pipeline, adapted)
+   4. Builder: one sequential pass per plot over intervals; P1 gives first entry, P2 gives exits; emits split rows.
+      Stage 1 (naive: entry W/2, midpoint exits) -> Stage 2 (P1 weighted-mean entry + moment-matched P2) -> MI loop.
+   5. INLA fit per transition, Rubin pooling (`05_fit_inla.R`), diagnostics (`06_inspect_plot.R`).
+
+## Decisions made
+- Regen state = "state 0" at time 0. Hidden hops ignored. Number of states irrelevant (transitions decomposed). Interval gaps irrelevant.
+- Clock reset: time since entry. Absolute time is not a concern.
+- Data: `data/processed/combined_covariates.rds` (48,012 visits, 11,393 plots), keys id_pe + no_mes.
+- W_j (stand age at FIRST visit, fixed per plot, used only by P1): from `cl_age`.
+  Source: `pee_ori_sond.cl_age`, gaps filled from `station_pe.cl_age` (both in data/raw/pep/PEP.gpkg).
+  Class -> number: VIN/VIR=100, JIN/JIR=50, else leading 120/90/70/50/30/10.
+  Rules: 1 first visit; 2 later visit back-calculated (minus elapsed years; if <= 0: 0 when the first state is regen, otherwise the later class value itself, decided 2026-10-14); 3 min(time since fire, harvest) at first
+  visit from raw origine/perturb; 4 first state regen AND later exits regen -> 0; else EXCLUDE.
+  RESULT of 04_prepare_inla.R (dataset visits): rule1 9758, rule2 1584, rule3 0, rule4 2, excluded 49 of 11,393 (44 regen, 3 black_spruce, 1 jack_pine, 1 yellow_birch);
+  11,344 plots included. (Raw-visit estimate was 47: two plots only had cl_age at raw visits that are not in the combined dataset.)
+  Layer comparison: pee more accurate where checkable (80% vs 66% exact class vs age from origin year), station far more complete at visit 1.
+- Transition filter: a transition needs >= 15 actual events (observed state changes, not N at risk), else dropped as a whole.
+  Covariate terms per kept transition: continuous: none extra; fire needs >= 15 fire events; pest >= 15 pest events;
+  harvest (0 none / 1 light / 2 heavy) needs >= 15 in EACH level; if a level fails collapse to any-harvest and need >= 15; else drop harvest.
+  Counted at the event interval.
+  RESULT (04_prepare_inla.R, 11,344 plots, 36,505 intervals, 8,879 state changes): 146 observed pairs of 156, 91 kept (>= 15) holding 8,525 events;
+  354 events (4.0%, 312 plots) fall on dropped transitions; all 13 states reachable from regen via kept pairs.
+  Terms with end-visit flags (91 kept): fire 14, pest 19, harvest 3level 17 / any 32 / none 42.
+  ERRATUM: an earlier count of 6,382 events / 77 kept was wrong (pandas string-dtype bug in the run grouping); 8,881 events matches data-output/data/transition_counts.csv.
+- 2026-10-19: the covariate terms per kept transition now ALSO include GDD x disturbance interactions and TSD terms; see section "Status 2026-10-19" (earlier results in data/processed/fit/ are main-effects only).
+- Covariates change over time (flags AND climate), so rows are SPLIT per visit interval (no collapsing into runs).
+  `rle` is not needed; a running `entry_used` carries the clock origin.
+- Row rules (time since entry, in decades = years/10), per sojourn with entry E:
+  truncation of first segment of first sojourn = max(W - E1, 0)/10; first segment of a later sojourn = 0 (starts at imputed exit);
+  any later segment = previous visit - E (end of previous segment). Tstop = segment end (visit) or imputed exit T for the event segment.
+  Every segment has status-0 rows for all destinations; the event segment has one status-1 row (realized destination) + status-0 for the others.
+  Stub: the segment from imputed entry to the first visit in the new state is its own segment.
+- Dropped transitions: hazard 0 in P1; their events still get an imputed exit (needed for competing censoring and the next entry), by midpoint.
+- Plots must never be dropped because P1 finds no candidate path: needs a fallback (proposal: naive Stage-1 entry W/2, counted and reported). TO IMPLEMENT.
+- P1 uses the covariates of the plot's first interval. P2 uses the event interval's covariates.
+- Final recount of events per transition/level right before INLA (last check).
+
+## Verified (do not redo)
+- Collapsed vs split rows give identical INLA results (static covariates): `R/tests/test_split_vs_collapsed.R`
+  (events 1281 = 1281, one per id; log-lik diff 5e-12; INLA diffs <= 3e-7).
+  The test's "true value" labels used the wrong Weibull parametrization (pipeline fits variant 1: S = exp(-(lambda t)^alpha));
+  estimates equal true/alpha as expected. Rules also checked in Python on 2000 random two-sojourn plots (max diff 4e-16).
+- Step D thresholds re-read from the simulation header: numbers reproduce, but event-count thresholds cannot be re-derived from the saved rds.
+  Red flag: imputed continuous-term coverage degrades at large N (gdd ~0.47-0.50, cmi 0.33-0.77 at N=2000), alpha coverage 0 at N=2000.
+
+## Findings about the data that matter
+- Disturbance flags `fire/harv/pest` in combined_covariates are CARRIED FORWARD within an epoch (03_build_covariates.R step 7);
+  an origine-level event starts a new epoch and resets. ~99% of flagged starts stay flagged at the next visit.
+  New onsets between consecutive visits: fire 287, pest 1000, harv 2848 of 36,619 pairs. tsf/tsh/sfp are time since disturbance.
+  Harvest coding: 2 = origine-level (heavy), 1 = perturb-level (light).
+- Start vs end flag on the 8,880 state-change intervals: they differ in 199 (fire), 482 (pest), 1682 (harv). Example black_spruce->regen (n=809): heavy harvest start 44 vs end 423; fire 70 vs 141.
+- Sim details: sojourn covariates were static per individual (cov1); D drawn per sojourn; multi-covariate Step D/E generation code is not in the folder.
+
+- W_j data quality: 96 plots have W_j = 0 (94 via rule 2 flooring at 0), 35 of them with a NON-regen first state; non-regen first state with W_j <= 5: 75, <= 10: 275.
+  P1 (forward simulation from regen to W_j) cannot reach those first states -> they need the no-candidate fallback.
+
+## Open / to decide  (HISTORICAL -- superseded by FINAL HANDOFF LIST v5 at the end; e.g. cmi_sum was replaced by cmi_gs)
+- Resolved 2026-10-19: continuous set is final (gdd_3, cmi_sum, soil_pc1); no domain random effect for now.
+- Interval covariates: flags at the END visit (default, carried in table) vs START visit (also carried as *_start).
+- Which continuous covariates enter the model; scaling.
+- Fallback for plots with no P1 candidate path (see above).
+- Adapt P1 (covariate row = first interval) and P2 (event interval covariates) for per-transition formulas (beta matrix with zeros for dropped terms).
+- No R/INLA in the cloud environment: tests are run by the user locally.
+
+## Status 2026-10-14 (B1, B2, B8, B7 implemented and run in the cloud with R on the real intervals)
+- `R/covariate_spec.R` (B1): COV_CONT is a PLACEHOLDER (gdd_3, cmi_sum, soil_pc1), z-scored; fire/pest/harvest dummies from END-visit flags;
+  `term_mask()` / `rhs_formulas()` give per-kept-transition formulas (zeros in the beta matrix for dropped terms).
+- `R/04b_build_rows.R` (B2): `build_rows()` split-row builder, `p2_midpoint()` hook, `recount_events()` (B7).
+- `R/tests/04c_check_rows.R` (B8): Stage-1 build (entry W_j/2, midpoint exits) -> 544,608 rows, 45,384 segments; all checks pass:
+  status-1 rows 8,879 = state changes; kept events 8,525; time at risk per plot = last - first visit; segments contiguous;
+  row log-lik == per-sojourn log-lik (diff 1e-11); recount matches transition_set.
+- BUG FOUND AND FIXED while building: the stub segment was first only emitted when another interval followed the event, which dropped the
+  time from the imputed exit to the last visit when the event interval was a plot's last one. Stub is now emitted after EVERY event.
+- Caveat: check 4 compares rows with a collapsed likelihood built from the same segments; the independent INLA equivalence test is `R/tests/test_split_vs_collapsed.R`.
+
+## Status 2026-10-15: fitting code written (05a_fit_funs.R, 05_fit_inla.R); NOT yet run with INLA
+- Decisions: M = simulation values (SIM_M 200 paths, M_MI 30, 6 workers). P1 with no candidate -> entry W_j/2, marked and counted, NO retry (assess afterwards).
+  Stage-1 fit failed / NA for a kept transition -> hazard 0 in P1 and midpoint in P2 for that transition only, counted (assess afterwards).
+- Stages: 1 naive (W_j/2, midpoint) -> theta_stage1; 2 P1 weighted mean + moment-matched P2 with theta_stage1 -> seed models;
+  MI loop (draw theta_m from seed posterior, P1 draw, chained P2, fit); Rubin pooling. Checkpoints in data/processed/fit/ (delete to redo).
+- Copied/adapted from the simulation (folder untouched): sim_entry_candidates_2b, compute_weights_2b, moment_match_weibull_naive, draw_theta_m, pool_rubin.
+  fit_inla_models is SOURCED read-only from the simulation folder.
+- P1 bracket (real): first change interval (last visit in first state, first visit in new state); no change -> right-censored at last visit. No hidden-hop flag.
+- build_rows: exit imputed exactly at the last visit would give Tstop == truncation; Tstop is floored at truncation + EPSILON and counted (n_floored).
+- Mock test (R/tests/test_fit_mock.R, fake INLA): flow works on all 11,344 plots; Stage 2 about 136 s with 2 cores (P1 dominates).
+  Mock theta is meaningless, so the mock P1 fallback counts (30-60 plots, mostly jack_pine first states) say nothing about the real rate.
+- To check on the first real run: posterior-sample row names printed by 05_fit_inla.R, number of failed Stage-1 fits, P1 fallback plots (p1_fallback_plots_stage2.csv).
+
+## Status 2026-10-15: first real run (INLA, all 11,344 plots) and diagnostics rerun
+First run (outputs mi_raw.csv, mi_diag.csv, pooled.csv in data/processed/fit/; kept untouched):
+- Stage 1 about 1 min, Stage 2 about 2 min, MI loop 30 imputations about 25 min. Posterior-sample name matching works (n_theta_fallback 0 in all 30).
+- Stage 2: 0/91 fits failed, alpha range 0.82-2.69, events per fit min 15 / median 48. P1: 124 of 11,344 plots without a usable candidate (124-196 per MI run),
+  concentrated in young non-regen plots (W_j quality, upstream); entry W_j/2 for those, marked. P2: 8,879 exits, 354 by midpoint (dropped transitions).
+- Problems seen in the MI results (cause NOT understood yet):
+  * 5 failed fits (black_spruce->regen m=5,11,15; other_temperate->white_birch m=24,28); the error text was not stored (tidy_fit discarded it).
+  * 9 degenerate fits (alpha posterior SD exactly 0) for black_spruce->regen: pooled alpha 1.846 vs 1.888 without them, fmi 0.82.
+  * red_maple->yellow_birch m=1 outlier (alpha 3.34, SD 0.028) doubles the pooled SE; 7 more fits with unusually small alpha SD (mostly alpha ~1.05).
+  * Rubin's B is not robust to outliers. Do not trim because values are extreme; drop only fits shown to be computational failures (non-convergence, SD 0),
+    keep spread that is imputation-driven. Cannot be decided without the error/diagnostic output -> rerun below.
+  * alpha > 2 for 6 transitions; Stage 1 -> Stage 2 alpha shift. No truth, so bias cannot be judged.
+- Seed (stage 2) models: all 91 ok, mode.status 0, no warnings, so INLA flags alone will not separate the bad fits. Several seed fits have alpha mode 1.000, SD ~0.05
+  (prior or sparse data? not checked).
+- COV_CONT is still a placeholder (supervisor discussion pending). Bioclimatic domain random effect (earlier spec) is NOT in the model.
+- Pooling still lacks Barnard-Rubin df and log-scale pooling of alpha (offered, not implemented).
+- Reproducibility: the first run's theta draws used INLA's default (clock) sampler seed, so imputations cannot be reproduced.
+
+Diagnostics rerun (code in R/05a_fit_funs.R, R/05_fit_inla.R; tested with the mock only):
+- RUN_TAG "diag": outputs mi_raw_diag.csv, mi_diag_diag.csv, mi_errors_diag.log, pooled_diag.csv, so the first-run files stay.
+- Sampler seed now taken from R's RNG per call (seed > 0, num.threads "1:1") -> reproducible after set.seed(SEED*1000+m) (not yet verified with real INLA).
+- Per fit in mi_raw: error_msg, mode_status, mlik, log_warn (warning-like INLA log lines).
+- extras_diag_mXX.rds per imputation: theta_m (drawn parameters), p1 (entry, n_cand, fallback per plot), p2 (imputed exit per event),
+  fits[[label]] = summary.fixed / summary.hyperpar (quantiles, mode, kld), internal hyperpar, marginals (fixed, alpha), mlik, mode theta/status, log posterior mode,
+  optimiser trace, nfunc, warnings, cpu, n_rows, last 40 log lines, and the joint posterior mean + covariance of (Intercept, betas, alpha) from N_COV_SAMPLES (1000)
+  posterior samples. Intercept on INLA's decade scale (subtract log 10 for years); covariance unaffected. Failed fit -> list(error = text).
+- models_diag_m01.rds: full INLA objects for imputation 1 (SAVE_MODELS_FOR), to measure size (first-run stage2.rds: 217 MB for 91 fits, ~9 MB per fit in memory).
+  Unneeded parts: per-row summaries, model.matrix, .args$data (about 2.3 + 2.6 MB per fit); misc$configs (3.9 MB) only for later sampling.
+- run_meta_diag.rds (once): INLA version, sessionInfo, INLA control settings (priors) of a seed fit, source of fit_inla_models, formulas, transition table.
+- Unknown until the run: time for the 1000 posterior samples per fit (lower N_COV_SAMPLES, or 0, if too slow) and the size of extras per imputation.
+- Next: read error_msg / log_warn / opt_trace of the failed and degenerate fits; compare their imputed inputs (p1, p2, theta_m) with the normal fits; then decide drop vs keep.
+
+## Status 2026-10-15 (later): result of the "diag" run and further changes
+Run result (data/processed/fit/mi_*_diag.csv, pooled_diag.csv, models_diag_m01.rds 211 MB):
+- The device copies of 05_fit_inla.R / 05a_fit_funs.R were the earlier diagnostics version, so extras_diag_mXX.rds and run_meta_diag.rds were NOT written
+  (cause unknown; possibly an older editor buffer saved over the committed file). Extras version re-committed; check the files after reloading the editor.
+- Saved diagnostics: error_msg is only INLA's generic "inla-program exited with an error" (uninformative); mode_status is 0 for every fit that ran (INLA's flags do not catch
+  the bad fits); log_warn matched a harmless header line (fixed now).
+- Problem fits: black_spruce->regen 5 failed (m=1,4,6,17,20) + 4 with alpha SD < 1e-3 (m=7,14,15,23); other_temperate->white_birch 3 failed (m=8,9,11).
+  Different imputations than in the first run -> imputation-dependent, not a fixed-seed effect. red_maple->yellow_birch outlier recurs (alpha 3.37 at m=7; first run 3.34 at m=1); its SD is normal so no SD screen catches it.
+  other_temperate->white_birch (21 events): alpha near 1.04 in most imputations, 1.4 in at least 5 (large SD) -> weak data, not a failure (not confirmed).
+- Stability between the two runs (pooled alpha): SE ratio new/old 0.49-1.56; median change in pooled estimate 0.02 SE, max 0.43 SE (trembling_aspen->sugar_maple 1.163 -> 1.080, SE halved).
+  P1 fallbacks 133-191 per imputation (stage 2: 124).
+Changes made after this run (tested with the mock and on the real mi_raw_diag.csv; not yet run with INLA):
+- fit data of every failed or near-degenerate fit (alpha SD < SD_MIN = 1e-3) saved per imputation as baddata_<tag>_mXX.rds (data, rhs, label) -> rerun with verbose = TRUE.
+- log_warn pattern fixed (no longer matches INLA's "Relative/Absolute error" header lines).
+- Pooling: pool_all() keeps the regular Rubin columns unchanged (checked identical to pooled_diag.csv) and adds r, fmi, Barnard-Rubin df (complete-data df = events - parameters), t-based 95% interval,
+  and for alpha pooling on the log scale (log_est, log_se, est_from_log, ci_*_log). Written as pooled_<tag>.csv (all fits that ran) and pooled_<tag>_excl.csv (flagged fits removed:
+  INLA error or alpha SD < SD_MIN, removed for all parameters of that fit); flagged_fits_<tag>.csv lists them.
+
+## Status 2026-10-19: failed-fit redraw done; interactions and TSD added to the model (implemented, NOT yet run with INLA)
+Failed-fit handling (07_redraw_failed.R, run on the main-effects model, tag diag):
+- black_spruce->regen 8 of 30 fits collapsed (m=2,8,14,15,19,23,25,29), other_temperate->white_birch 3 INLA errors (m=20,24,29). Per-transition redraw from candidate imputations m31-42:
+  replacements black_spruce->regen m31,33,34,35,37,39,40,41; other_temperate->white_birch m31,32,33. Screen: ratio = alpha_SD/(0.78*alpha/sqrt(events)); a fit fails on INLA error, NA estimate or ratio < 0.1.
+  Healthy fits in the original 30 had ratio >= 0.265. Root cause of the collapse unknown (INLA's inner latent solve fails intermittently).
+- Pooled alpha black_spruce->regen 1.884 (SE 0.0669); excluded 1.886; as-is 1.855. 14 of 554 series changed; m_eff 30 everywhere.
+  Unexplained: candidates scatter from the originals more than random subsets do (|z| > 2 share 9.8% vs 5.3%, p = 0.013).
+
+Omission found: the real-data fits so far were MAIN-EFFECTS ONLY. This was not deliberate; the model should have had interactions from the start.
+Model specification (decided by the user 2026-10-19):
+- INLA weibullsurv variant 1: S(t) = exp(-(lambda t)^alpha), lambda = exp(eta), t in decades; hazard h(t|x) = alpha t^(alpha-1) exp(alpha eta). Intercept is in eta.
+  Hazard ratio = exp(alpha * beta), NOT exp(beta). The ecology summaries written earlier used exp(beta) and understate effects (signs and rankings unaffected); recompute.
+- GDD x disturbance interactions, GDD only (not CMI): ":" products with both main effects present: gdd_x_fire, gdd_x_pest, gdd_x_harv_light, gdd_x_harv_heavy, gdd_x_harv_any = z_gdd_3 * flag.
+  Main effect of a disturbance = effect at mean GDD (z_gdd_3 is centred over all intervals of the final plot set).
+- TSD: one term per disturbance TYPE (tsd_fire, tsd_pest, tsd_harv = any harvest). RAW time since the disturbance in DECADES; not centred, not averaged, not capped. 0 = at the disturbance.
+  Structural zero where the flag is 0 (nested "x" structure; the flag main term carries the on/off effect).
+- Term mask: fire_term -> gdd_x_fire + tsd_fire; pest_term -> gdd_x_pest + tsd_pest; harvest 3level -> gdd_x_harv_light + gdd_x_harv_heavy + tsd_harv; harvest any -> gdd_x_harv_any + tsd_harv.
+- Thresholds: unchanged (>= 15 events per kept transition / per level). NO additional threshold for interactions or TSD: allowed wherever the disturbance main term exists (about 53 transitions).
+  Basis: Step D (stepD_oracle_vs_imputed.R) needs no stricter threshold for interactions under the oracle; under real imputation interactions are systematically attenuated toward zero
+  (not fixable with more imputations). The older rule "min(n_dist, n_undist) >= 20" came from an earlier power-curve analysis (derivation script not found) and was superseded.
+  Planned reporting: flag interactions with 15-19 disturbed events as lower confidence; >= 20 subset as a sensitivity check; state the attenuation limitation.
+- COV_CONT final (gdd_3, cmi_sum, soil_pc1). No domain random effect for now. Full 30-imputation pipeline to be rerun under RUN_TAG "int", outputs in data/processed/fit_int/.
+
+Missing TSD (decisions):
+- TSD source (decision A): `*_imputed` (minimum-plausible TSD, a LOWER bound; an undated disturbance first seen at a visit gets that visit's year). `*_imputed_prev` (upper bound) not used.
+  Consequence: before exclusions about 24% (fire), 45% (pest), 45% (harvest) of flagged intervals have TSD exactly 0 (22 / 42 / 36% of event intervals). Sensitivity run with `imputed_prev` not done.
+- 204 intervals in 72 plots (65 event intervals) have a flagged disturbance without TSD; all because the disturbance is already active at the plot's first visit with no year (NA carries through the episode).
+- Origine-level disturbances (10 plots: 1 BR, 9 CT): TSD = W_j + (visit year - first-visit year) = t_abs ("W_j trick"), user-approved.
+- Perturb-level (partial) disturbances (62 plots: 44 CP, 1 CE, 17 EL): cannot be dated -> plots EXCLUDED (tsd_excluded_plots.rds). Cost: 76 of 8,879 events (0.9%); three terms lost, each by one event
+  (fir->trembling_aspen pest term 15->14; regen->other_pioneer harvest 3level->any, light level 15->14; white_birch->trembling_aspen harvest any->none). 91 kept transitions unchanged.
+- Rescue by assigning ages to some perturb plots was examined and rejected: W_j (stand age class) bounds a partial cut only from above; rescuing all three terms needs plots with W_j 30-50.
+  Cored-tree ages (dendro_arbres_etudes): 7609604002 and 7501401202 show one surviving cohort and no information on the CP date. 7501702402 shows a stand-replacing event 1975-77 and station_pe
+  records origine CT there, i.e. a clear-cut (heavy), so it would not rescue the light level either.
+- Open observation, NOT checked: 03_build_covariates.R reads origine/perturb from pee_ori_sond only (line 52). station_pe also has origine/perturb codes (e.g. CT at visits 2-3 of plot 7501702402
+  where pee_ori_sond has none). Whether undated or station-only clear-cuts are mis-coded as light harvest or missed is unknown.
+- Open interpretation risk, NOT tested: flags and TSD are taken at the END visit of the interval, so negative tsd coefficients may partly reflect the timing convention. A start-visit TSD variant exists as an option.
+
+Files changed 2026-10-19 (originals copied outside the project):
+- covariate_spec.R: 8 new terms in add_model_covariates / all_terms / term_mask, checks on the TSD columns (no NA, >= 0, zero where the flag is 0).
+- 04_prepare_inla.R: TSD_SOURCE <- "imputed", W_j trick for origine plots, exclusion of plots with undated flagged intervals (writes tsd_excluded_plots.rds), tsd_fire/pest/harv in decades in the interval table.
+- 05_fit_inla.R and 07_redraw_failed.R: RUN_TAG "int", OUT_DIR data/processed/fit_int (the old untagged stage1.rds, stage2.rds, scaling.rds in fit/ must not be resumed or overwritten).
+- Rerunning 04 overwrites visit_intervals.rds, transition_set.rds, plot_info.rds; results in fit/ stay but no longer match those tables.
+Checked on staged data (R in the cloud): files parse; 62 plots / 183 flagged intervals excluded; 91 kept transitions, 3-14 terms each; only the three terms above change. NOT checked: the .gpkg read in 04, any INLA fit with the final spec.
+Run order: 04_prepare_inla.R -> test_interaction_inla_v2.R (one transition, real spec) -> 05_fit_inla.R -> 07_redraw_failed.R if needed.
+After the run: recompute hazard ratios as exp(alpha*beta); consider the end-visit TSD timing test; Methods_draft.docx not yet updated.
+
+## Status 2026-10-20: "int" run complete (30 valid fits for all 91 transitions); final pooling done
+Decisions (user, final; do not reopen):
+- INLA weibullsurv variant 1 for ALL transitions. No MLE or Poisson-offset engine as the analysis fit; no transition is fitted differently from another.
+- Failed/invalid fits are replaced by fresh imputations (per-transition replacement). Rubin pooling is per parameter, so transitions may be pooled over different imputation indices.
+- 30 valid fits per transition are pooled (the same number for every transition).
+- Model: GDD x disturbance interactions (":" products) and one TSD term per disturbance type (see "Status 2026-10-19").
+
+What was run (tag int, data/processed/fit_int/):
+1. 05_fit_inla.R: imputations m1-30, all 91 transitions (2730 fits).
+2. 07_redraw_failed.R (MAX_CAND 80): candidate imputations m31-114 (84), all 91 transitions, to replace failed fits (ratio screen only at that stage).
+3. Screen revision. The ratio rule alone let partial collapses through (black_spruce->regen m21, m37, m73: intercept stuck or shifted). FROZEN SCREEN (below) applied to every fit.
+4. 07b_bsregen_sweep.R: black_spruce->regen only (the one transition without 30 valid fits), candidates m115-156 (42), same data build (identity check against a saved dataset), same screen. 14 valid, 7 INLA errors.
+   The sweep was only a PREFILTER: it fitted one transition per imputation and stored no posterior samples/extras.
+5. 07c_bsregen_cov.R: regular run_one_imputation() (all 91 transitions, all standard outputs: extras, covariance, diagnostics) for the 14 sweep-valid imputations (m116,117,120,122,123,127,133,140,145,148,150,151,153,156).
+   Rule: the REGULAR full-pipeline fit decides validity. m145 and m148 (valid in the sweep) gave INLA errors in the regular run, so 12 of 14 count. Their fits for the other 90 transitions are stored but not used.
+6. 08_final_pool.R: pulls all regular-pipeline fits, applies the frozen screen, takes the FIRST 30 valid fits per transition in increasing m (selection by index only), Rubin-pools estimates and the joint covariance.
+
+FROZEN SCREEN (identical for every transition, fixed before applying it to new fits). A fit is valid if ALL hold:
+- INLA returned no error and est/sd are not NA;
+- alpha-SD ratio sd_alpha / (0.78 * alpha / sqrt(events)) >= 0.1 (0.78*alpha/sqrt(n) is the asymptotic Weibull-shape MLE SE; the rule catches collapsed alpha SDs of about 2e-4);
+- |intercept - ref| / ref_sd <= 4, where ref and ref_sd are the median intercept and median intercept SD of the transition's ratio-passing fits in m1-114
+  (black_spruce->regen: -4.985135842 and 0.06137571849; 08_final_pool.R recomputes them and checks this). Across ~8,800 ratio-passing fits only m21, m37, m73 exceed |z| = 4 (z = 11 to 44; all other fits < 1.6).
+The screen detects collapse signatures. It does NOT prove a fit is correct (no MLE comparison exists for healthy fits; an MLE comparison was done only for the saved collapsed datasets of the main-effects run: 06c).
+
+Failure statistics (all 91 transitions, frozen screen, fit_validity_int.csv):
+- m1-30: 36 of 2730 fits invalid (1.3%); m31-114: 107 of 7644 (1.4%); m115-156 (14 pre-selected imputations): 7 of 1274 (0.55%).
+- Reasons: alpha-SD ratio 115, INLA error/NA 32, intercept 3.
+- Invalid fits concentrate in 8 transitions: black_spruce->regen 96, regen->fir 18, fir->sugar_maple 18, other_temperate->white_birch 9, regen->red_maple 6, jack_pine->regen 1, trembling_aspen->regen 1, white_spruce->red_maple 1.
+- Outside black_spruce->regen: 16 of 2700 invalid in m1-30.
+- black_spruce->regen: valid 10 of 30 (33%) in m1-30; 10 of 84 (12%) in m31-114; sweep m115-156 14 of 42 (33%) before the regular-run check, 12 of those 14 valid in the regular run. Total valid 32; the first 30 by m are used (m1-114 plus m116 ... m151; m153 and m156 unused).
+  Why the rate fell from 33% to 12% and recovered to 33% in the single-transition sweep: UNEXPLAINED (not tested; ideas: 91 sequential fits per worker vs one, resource contention).
+- Reproducibility: refits of the main-effects collapsed datasets under default settings reproduced the collapse in 7 of 8 black_spruce->regen cases (06c). But m145 and m148 fitted in the sweep and errored in the regular run, so INLA is not perfectly deterministic across run contexts.
+- Selection concern: replacing/pooling only valid fits selects on INLA convergence. Argument for ignorability: failure does not depend on the imputed entry summaries (tested for black_spruce->regen only, weak power) plus the failure being numerical. Not proven.
+- Low alpha-SD ratio fits remain in the pool (they pass the frozen screen): black_spruce->regen m30 (ratio 0.36), m99 (0.18), m109 (0.14) [m145 (0.15) not used]; regen->fir m36 (alpha 1.945, ratio 0.21); many fits at alpha 1.0-1.1 in sparse transitions with ratio 0.3-0.5 (not interpreted).
+  Sensitivity for black_spruce->regen without m30/m99/m109 (29 fits of the earlier 32-fit pool): alpha 1.830 -> 1.838, every coefficient moved < 0.1 SE. 10_sensitivity_posthoc.R repeats this for all transitions.
+
+Final pooled results (data/processed/fit_int/): pooled_int_final.csv (727 rows; estimates, SE, CI, fmi, m_eff = 30 everywhere), pooled_int_final_cov.rds (named list by transition: Rubin-pooled joint covariance of intercept, betas, alpha), fit_validity_int.csv (every fit, screen result, used yes/no).
+- black_spruce->regen (30 fits): alpha 1.828 (SE 0.070, fmi 0.53); heavy harvest 1.548 (0.078); fmi for alpha is high (half of its uncertainty is imputation).
+- The other 90 transitions are identical to pooled_int_redraw.csv. pooled_int_redraw.csv's black_spruce->regen row (23 fits including m21/m37/m73) and the 07b/07c black_spruce->regen pooled files are SUPERSEDED.
+
+Known limitation (documented, not corrected): joint covariance and alpha.
+- The joint covariance comes from 1000 draws of inla.posterior.sample(). Per the INLA documentation, the hyperparameter (alpha) is drawn only from the configurations of the numerical integration (int.strategy "grid", dz 0.75, diff.logdens 6 = INLA defaults; model_fitting.R of the simulation uses the same call). The intercept/betas are drawn from their Gaussian conditional on alpha.
+- When alpha is poorly determined (sparse transitions, alpha near 1, long right tail) the sampled alpha is narrower than INLA's own alpha marginal. Sampled alpha SD < 0.9 x INLA's in 91 of 2730 used fits (cedar->yellow_birch, fir->sugar_maple, red_maple->sugar_maple, red_maple->yellow_birch, trembling_aspen->red_maple, black_spruce->white_birch, ...; lowest pooled ratio 0.78 in black_spruce->white_birch). All beta/intercept diagonals agree with the pooled SEs (0.99-1.015).
+- Pooled estimates and SEs (from INLA's own summaries) are NOT affected. The alpha variance and alpha-beta covariances used for hazard-ratio CIs are somewhat too small in those transitions. We stay with INLA's documented procedure; flag these transitions in the HR table (column alpha_cov_ratio_med in hazard_ratios_int.csv).
+- A post-hoc correction (law of total variance, INLA alpha mean/variance substituted) was tried and rejected: it made 124 of 19,080 beta SDs deviate by > 10% from INLA's (2 before) or produced non-positive-definite matrices (87 of 2730). The proper fix would be refitting with a finer grid (not done). INLA's own fixed-effect marginals use the same integration grid, so they are not an independent check of the tails.
+
+Hazard ratios (09_hazard_ratios.R) and sensitivity analyses (10_sensitivity_posthoc.R) were written 2026-10-20; NOT yet run on the user's machine.
+- HR = exp(alpha * c'beta) for a contrast vector c over the model terms. Per imputation: log HR = alpha * c'beta (INLA posterior means from mi_raw), variance by the delta method with the stored joint covariance (gradient: alpha*c for beta, c'beta for alpha). Rubin-pool the log HR (Barnard-Rubin df), then exponentiate. Contrasts: per-SD GDD/CMI/soil; disturbance vs none at GDD z in {-1,0,1} and TSD in {0,1,3} decades; GDD effect within a disturbance; GDD x disturbance ratio of HRs; HR per +1 decade since disturbance.
+- Sensitivity (post-hoc, no refits): (S1) GDD x disturbance interactions restricted to >= 20 disturbed events (15-19 flagged as lower confidence); (S2) pooling without fits with alpha-SD ratio < 0.5; (S3) pooling all valid fits (about 128 imputations per transition) instead of the first 30.
+- Sensitivities that need new INLA runs and are NOT scripted: TSD upper bound (`imputed_prev`; 04 has TSD_SOURCE but rerunning 04 overwrites visit_intervals.rds, transition_set.rds, plot_info.rds, so a separate output tag is required first), and start-visit flags/TSD instead of end-visit (timing convention may partly drive negative TSD coefficients). Each is a full 30-imputation run plus redraw plus the frozen screen.
+
+Still open: station_pe vs pee_ori_sond origine/perturb codes (undated or station-only clear-cuts possibly mis-coded as light harvest); the 62 excluded plots (76 events) to be reported; Methods_draft.docx not updated; MLE comparison for healthy fits does not exist.
+
+## Status 2026-10-22: growing-season CMI ("gs" run) implemented, NOT yet run
+- CMI changed from annual (cmi_sum) to growing-season cmi_gs = cmi_5 + ... + cmi_10 (May-Oct = NRCan growing season, same period as gdd_3), built in 03z
+  (exact: 10-yr averaging is linear). cmi_sum dropped in 03z. r = 0.997 with Brice et al. 2020 May-Sept CMI; r = -0.77 with gdd_3 (plot level).
+  Reason: 73% of annual-CMI between-plot variance came from Oct-Apr; opposite CMI signs vs Brice 2020 for boreal->temperate transitions.
+- New tag "gs", outputs in data/processed/fit_gs/ ("int" stays as archive in fit_int/). Old pre-change copies of edited scripts: R/archive/_archive_pre_gs/.
+- 05a: fit_rows / tidy_fit / run_one_imputation gained only_k (fit only some transitions; the imputation itself is identical; mock-tested).
+- 07_redraw.R replaces 07 / 07b / 07c (int-only, marked ARCHIVE): frozen screen refs from m1-30 written BEFORE any candidate; candidates fit only
+  the transitions still short of 30 valid fits.
+- 08_final_pool.R rewritten: generic tag, refs from screen_ref_<tag>.csv, NO alpha-covariance correction (the rejected correction is gone; this also
+  removes the script/output mismatch of the int run). Tested on the int fits: reproduces pooled_int_final.csv exactly.
+- 09-12: tag gs, z_cmi_gs / per_sd_cmi_gs.
+- Run order: 03z -> 04 -> 05 -> 07_redraw -> 08 -> 09 -> 10 -> 12 (-> 11 optional). Check after 04: transition counts identical to int.
+
+## INLA failures: diagnosis 2026-10-22 (independent MLE, no INLA; rows rebuilt from extras, verified identical to the fitted data)
+- Healthy (valid) fits, imputation 1, 89 transitions: betas agree with the MLE (median |z| 0.18, SD ratio ~1.1); alpha systematically LOWER than the MLE
+  (median z -0.9 to -1.4 at all sample sizes; sparse transitions: posterior SD ~0.23 x MLE SE) = the default PC(5) prior on alpha (pc.alphaw, base alpha = 1).
+- Invalid fits are numerically wrong, not legitimate imputation spread: black_spruce->regen / regen->fir collapse (alpha SD ~2e-4, alpha below the MLE);
+  fir->sugar_maple / regen->red_maple jump to alpha ~3.1-3.3 (SD ~0.012) where the profile likelihood is 11-20 log units below its maximum (MLE 1.6-2.0).
+- Concentration: transitions with the longest left truncation and high alpha (black spruce, fir, and regen plots that are 70-140 years old: 458 of 1,685
+  regen-first plots have W_j >= 50 = BA < 5 but old age class). 06g: dropping high-H(tr) rows does NOT cure; 06q: shrinking truncation SIZE does.
+
+## INLA failures: mechanism established 2026-10-22 (scripts 13-17; all diagnostic, run on the "int" imputations or simulated data)
+### Mechanism
+- Trigger: ONE row with an extreme cumulative hazard at truncation, H(tr) = exp(alpha*eta) * tr^alpha (H(tr) 23 = survival 1e-10).
+  The likelihood only uses H(T) - H(tr) (moderate), but INLA breaks when H(tr) itself is extreme. Numerical, not statistical.
+- 15_failure_ablation.R: failures reproduce per dataset for black_spruce->regen (14/15) and regen->fir (13/15). The dataset's largest H(tr)
+  (at its own MLE) separates failing from working datasets (AUC 0.97 regen->fir, 0.82 black_spruce->regen; other features 0.26-0.62).
+  Exact reparametrisations (centring, time in years/centuries) do NOT cure the two large transitions. Removing heavy-harvest rows cures black_spruce->regen.
+- black_spruce->regen: the extreme rows are ordinary, well-recorded clear-cuts (pee CPR/CT, station CT) of stands 79-135 yr in black spruce;
+  ~43 plots rotate as the extreme row depending on the P1 entry draw. Largest H(tr) <= 22.6: 0/8 datasets fail; >= 23.2: 15/17 fail (correlational).
+- regen->fir (16_htr_threshold_test.R part A, 25 imputations, 1 INLA thread): caused by ONE plot, 7409800101 (old "regen", W_j 70, pest-flagged).
+  Remove only that plot: 0/25 fail. Controls (remove 2nd-most-extreme plot / a random plot): 15/15, 10/15, 11/15 still fail.
+  Its pest terms set to 0: 0/25 fail (pest drives its H(tr)). Censoring its event: does NOT cure (16 fail vs 9 as is; unexplained).
+  Dose-response (its time axis shifted, same datasets): H(tr) <= 18: 0/66; 18-21: 3/34; 21-23: 10/26; 23-25: 27/38; > 25: 36/36.
+  Note: contradicts 06g ("dropping high-H(tr) rows does NOT cure"; main-effects run, different settings). Not reconciled.
+- 17_htr_sim_grid.R (simulated data, no project data): 3,000 rows, true alpha 1.8, time in years, base rows H(tr) <= 7; plus ONE event row with H(tr) = H;
+  base data identical across H; 5 replicates; pipeline INLA call, 1 thread. Failed fits out of 5:
+    H 0 (no extra row) to 16: 0 | 17: 1 | 18: 1 | 19: 1 | 20: 1 | 21: 0 | 22: 0 | 23: 1 | 24: 3 | 25: 3 | 26: 4 | 27-30: 5
+  Above ~23 the failure is the same as in the real data (alpha SD collapses to ~0, alpha still plausible); at 17-20 occasional alpha jumps (2.2-2.3).
+  => An INLA numerical limitation, independent of our data and pipeline. Onset is not a sharp threshold: rises over ~23-26, certain from 27.
+  Minimal reproducible example (e.g. for D. Rustand / INLA developers): the H >= 27 cells.
+  (16 part B had 3 replicates only; its alpha = 3 cells were invalid by design: base rows already had H(tr) > 23.)
+- fir->sugar_maple, other_temperate->white_birch: different pattern (sparse; failures do not reproduce per dataset; alpha jumps to ~3.2;
+  cured by exact time-unit changes in 15). Looks like run-to-run numerical noise. Not explained. Thread test (1:1) not yet run for them.
+- Threading: with 1 thread per INLA call regen->fir as_is failed 9/15 vs 13/15 under default threading (int run): context changes outcomes near the boundary.
+- Other diagnostics: 14 (station_pe codes added): black_spruce->regen 34/50 -> 35/50 failed, flips both ways = not the cause (still a data correction to make).
+  13 (old-regen exclusion, W_j >= 50): regen->fir 17/33 -> 0/33, regen->red_maple 5/33 -> 0/33.
+
+### Is replacing failed fits neutral? (independent MLE on the same datasets, failing vs working; MLE used as a diagnostic only)
+- black_spruce->regen: 16 parameters, median |difference| 0.04 SE, max 0.23 SE, 0 with p < 0.05 -> replacement is neutral.
+- regen->fir: median 0.16 SE, max 0.35 SE, 8/13 p < 0.05 -> NOT neutral: rejecting failed datasets keeps imputations where 7409800101 is less extreme.
+  Dropping 7409800101 shifts MLE log alpha, tsd_pest, gdd_x_pest by up to ~0.7 SE when its imputed stay is long (~0-0.2 SE when short).
+  Resolved by the old-regen exclusion (ecological reason; removes the plot).
+
+### Decisions (user, 2026-10-22)
+- Model unchanged. Censoring clear-cuts in X->regen REJECTED (breaks symmetry with other transitions; black_spruce->regen essentially never happens
+  without disturbance, so "natural breakup" would not be genuine).
+- MLE is NOT used as a validity gate (if MLE decided validity it should be the estimator); diagnostic only.
+- Failed fits handled by replacement (07_redraw.R, frozen screen). Old-regen plots to be excluded in 04 (threshold W_j >= 50 and the 53 old plots
+  with a recorded origin still to decide). Contacting D. Rustand: deferred until the cause was known (now known; not yet decided).
+
+### Manuscript framing (draft)
+Methods (main text): "For a few transitions, INLA's Laplace-based approximation failed on some imputed datasets, giving a degenerate posterior for the
+Weibull shape (posterior SD of alpha near 0) or an implausible shape estimate. Failures were identified with a fixed screen applied identically to all
+transitions [criteria], and each failed fit was replaced by a fit to a new imputed dataset generated with the same algorithm; the first 30 valid fits per
+transition, in imputation order, were pooled. Failures occurred in [x]% of fits and were concentrated in [transitions] (Supplement S#)."
+Supplement S#:
+  1. Failure rates per transition and number of imputations attempted; the screen and its thresholds, fixed before replacement.
+  2. Mechanism: failures occur when an imputed dataset contains a row whose cumulative hazard at its truncation time is extreme (H(tr) above ~23,
+     i.e. survival < 1e-10): in black_spruce->regen, clear-cuts of stands with ~100 years in the black-spruce state. Table: largest H(tr) vs failure.
+  3. Simulation (17): one such row in otherwise clean simulated data reproduces the failure (0/5 below H 17, 5/5 from H 27), so it is a numerical
+     limitation of the software, not a property of the data or pipeline. Do not quote a sharp threshold.
+  4. Ignorability: independent maximum-likelihood fits on the same imputed datasets give the same estimates whether INLA failed or not
+     (black_spruce->regen: 16 parameters, median 0.04 SE, max 0.23 SE). INLA remains the estimator; MLE is a check only.
+  5. Old-regen exclusion is motivated ecologically (open mature stands, not regeneration); report that it also removes the regen->fir failures.
+  6. Sensitivity: pooling all valid fits instead of the first 30 (S3).
+
+### Open observations (not acted on)
+- The screen can pass partly degraded fits near the boundary (alpha SD shrunk to 0.03-0.05 vs ~0.07, ratio > 0.1). int final pool: 3 regen->fir and
+  3 black_spruce->regen fits with ratio 0.27-0.56.
+- The ratio criterion cannot see a collapse of alpha toward 0 (its expected SD scales with alpha); seen in 16 part B (alpha 0.06-0.11, truth 1.8).
+  Whether the intercept criterion catches these is untested.
+
+### Sparse transitions (18_sparse_failure_test.R, 2026-10-22): fir->sugar_maple, other_temperate->white_birch
+- fir->sugar_maple: all 18 int-failed datasets + 5 healthy refitted 3x (1 thread twice, default threading once): 0/69 failures; alpha identical
+  across the three fits. The int-run failures (alpha ~3.2, SD ~0) do NOT reproduce on the same data -> caused by the run context of the int run
+  (91 sequential fits per worker, 6 workers x default threads), not by the data. Not further explained.
+- other_temperate->white_birch: 6 of the 9 int-failed datasets crash in every setting (deterministic); 3 (m10, m16, m66) now work.
+  INLA log of a crash (m41): internal scale alpha = exp(0.1 * theta); the posterior of alpha is flat with a long left tail (21 events, prior pc.alphaw(5)),
+  so the integration grid reaches theta ~ -20 (alpha ~ 0.13), where INLA's log-density is NaN -> marginal likelihood NaN -> error.
+  The likelihood itself is finite and well behaved there (profile likelihood: -39 log units at alpha 0.13; best alpha 1.5-1.75; crashing and
+  working datasets have the same profile). Numerical edge of INLA's grid integration, not a data problem.
+- station_pe codes: fir->sugar_maple 16/41 events undisturbed in the pipeline, 10 of them with station-only partial cut (CP) or EL codes
+  (5 new at the event visit). other_temperate->white_birch 7/21 undisturbed, 5 with station codes (1 CT new at the event visit); this
+  transition has no disturbance terms (harvest 12 events < 15), still < 15 with the station CT. Station codes are identical in every imputation,
+  so they cannot explain why only some imputations fail. They matter as a data correction, not for the failures.
+- Handling: replacement (frozen screen), as for the other transitions.
+
+### Prior on alpha (19_alpha_prior_test.R, 2026-10-23; int datasets, 1 thread; MLE = no-prior reference)
+- Simulation folder (read only) already showed: PC-prior strength sweep 5 -> 0.01 roughly halves high-alpha bias (stepB Steps 8-9);
+  the earlier "wide" loggamma(0.1,0.1) test there was invalid (alpha internal scale = exp(0.1*theta)); seed-only prior change had small effect.
+- Sanity check NOT confirmed: explicit pc.alphaw(5) was fitted only on 3 crash-prone other_temperate->white_birch datasets; on m78 the default
+  worked (alpha 1.21) but explicit pc5 crashed. Must be re-checked on healthy datasets before using these results for a decision.
+- other_temperate->white_birch crash datasets: default 4/6 crash; pc1 0/6; pc0.1 0/6. (m78, m111 worked with default here but crashed in script 18: unexplained.)
+- 8 sparse transitions (15-18 events), median over 3 datasets: default alpha 0.97-1.03 with posterior SD ~0.055; MLE 1.01-1.53 with SE 0.24-0.32;
+  pc0.1 alpha 0.72-1.18 with SD 0.22-0.30. => with the default prior, alpha and its (5x too small) uncertainty in sparse transitions come from the prior.
+- Large transitions: fir->white_birch alpha 1.606 (default) / 1.628 (pc0.1) / 1.698 (MLE); black_spruce->regen 1.770 / 1.814 / 1.856; SDs unchanged.
+- Covariate effects (log HR = alpha*beta) vs default: median shift 0.01-0.17 default-SDs, max ~0.3 (excluding black_spruce->regen m7, where the default
+  and weak-prior fits were both partly degraded: alpha SD 0.031 / 0.012 / 0.003 vs 0.050).
+
+### Prior on alpha, follow-up (20_alpha_prior_test2.R, 2026-10-23; 10 imputations per transition; 1 thread)
+- 1a: explicit pc.alphaw(5) reproduces INLA's default (30 datasets; max difference 0.04% of a posterior SD; 12/30 bit-identical).
+  (19's sanity "failure" was on crash-prone datasets only.)
+- 1b: other_temperate->white_birch m78 crashed 4/4; m111 worked 1/4, crashed 3/4 -- same data, same settings, 1 thread: borderline fits are
+  NOT reproducible even with one thread (keeping INLA's files is not the cause). Possibly INLA's timing-based internal tuning (unverified).
+- Failing black_spruce->regen datasets: 10/10 still collapse under default, pc1 and pc0.1 (alpha SD ~2e-4) -> the prior does not cure the
+  extreme-row failures (as expected). fir->sugar_maple int-failed datasets: 0/10 fail under any prior (failure does not reproduce; see 18).
+- Pooled alpha (MLE / default / pc1 / pc0.1), SE in brackets:
+    fir->sugar_maple (41 ev):            1.63 (0.21) / 1.26 (0.19) / 1.38 (0.21) / 1.40 (0.21)
+    jack_pine->black_spruce (106):       1.78 (0.21) / 1.56 (0.21) / 1.63 (0.21) / 1.65 (0.21)
+    yellow_birch->fir (105):             1.17 (0.11) / 1.04 (0.07) / 1.06 (0.10) / 1.06 (0.10)
+    sugar_maple->other_temperate (118):  1.07 (0.11) / 1.01 (0.07) / 1.01 (0.10) / 1.01 (0.10)
+  No new failures with weaker priors in healthy transitions (0/30 each). Hazard ratios vs default: median shift 0.01-0.04 SD, max 0.16.
+- Open: healthy transitions with 20-60 events (about half of all transitions) not yet tested.
+- Sparser healthy transitions (script 20, 10 imputations each). Pooled alpha (SE): MLE / default / pc1 / pc0.1
+    other_pioneer->white_birch (22 ev)      1.44 (0.28) / 1.04 (0.06) / 1.16 (0.24) / 1.18 (0.26)
+    cedar->yellow_birch (26)                1.58 (0.28) / 1.16 (0.18) / 1.32 (0.25) / 1.36 (0.26)
+    other_pioneer->other_temperate (31)     1.25 (0.21) / 1.03 (0.06) / 1.10 (0.18) / 1.10 (0.20)
+    red_maple->yellow_birch (33)            1.52 (0.24) / 1.22 (0.19) / 1.34 (0.22) / 1.37 (0.23)
+    yellow_birch->red_maple (38)            1.09 (0.16) / 0.98 (0.06) / 0.93 (0.14) / 0.91 (0.16)
+    cedar->fir (57)                         1.13 (0.14) / 1.01 (0.05) / 1.00 (0.12) / 1.00 (0.14)
+  0 failures under any prior. Hazard ratios vs default: median shift 0.01-0.14 SD, max 0.22; intervals slightly wider with weaker priors.
+  Pattern: under the default, alpha either sits at ~1 with SE ~0.05-0.06 regardless of N (the prior's own width), or is pulled 1.5-2 SE
+  below the data (alpha > 1 cases). pc0.1 posterior SE ~ data-only SE (0.94-0.96x); pc1 ~0.82-0.87x in the sparsest transitions.
+- RECOMMENDATION (not yet decided by user): pc.alphaw(0.1) for all transitions in the final run, default pc.alphaw(5) as sensitivity.
+
+### Prior strength sweep (21_prior_strength_sweep.R, 2026-10-23; 10 healthy imputations each; 1 thread)
+- Pooled alpha (SE): MLE / default / pc1 / pc0.1 / pc0.05 / pc0.01
+    fir->white_birch (276 ev)            1.688 (0.111) / 1.597 (0.109) / 1.614 / 1.618 / 1.619 / 1.619   (SE 0.109 for all priors)
+    jack_pine->black_spruce (106)        1.778 (0.211) / 1.560 (0.209) / 1.632 / 1.647 / 1.648 / 1.649   (SE 0.207-0.209)
+    cedar->yellow_birch (26)             1.575 (0.278) / 1.163 (0.184) / 1.319 (0.254) / 1.356 (0.264) / 1.358 (0.264) / 1.360 (0.265)
+    other_pioneer->white_birch (22)      1.437 (0.279) / 1.038 (0.064) / 1.162 (0.242) / 1.183 (0.263) / 1.184 (0.265) / 1.185 (0.266)
+- Plateau: from 0.1 to 0.01 alpha changes <= 0.004 and SE <= 0.003. 0 failures under any prior (200 fits). No implausible alpha tails
+  (95% interval limits 0.66-2.25 across all fits and priors).
+- Hazard ratios vs default: median shift <= 0.14 SD, max 0.22; identical across 0.1/0.05/0.01. HR interval width: unchanged except
+  other_pioneer->white_birch (+27% with weak priors: the default interval was too narrow there).
+- Remaining gap weak-prior vs MLE (e.g. fir->white_birch 1.62 vs 1.69) is not prior-driven (does not move below 0.1).
+- => Any strength <= 0.1 gives the same results; 0.1 recommended (weakest-but-stable choice; insensitivity below it reportable).
+
+## DECISION 2026-10-23: prior on alpha = pc.alphaw(0.1) for all transitions (user decision)
+- Why 0.1 and not 1: at 15 events strength 1 still reports about half the data's alpha uncertainty (other_pioneer->red_maple SE 0.12 vs
+  data-only 0.28; white_spruce->black_spruce 0.16 vs 0.25), 0.1 matches it (0.27, 0.24). 0.1 is on the plateau (0.05 and 0.01 give
+  identical results: alpha within 0.004, SE within 0.003), so the exact value is immaterial; 1 is still on the slope.
+  No failures at 0.1 (~400 fits), it removes the other_temperate->white_birch crashes, no implausible alpha tails. Not lower than 0.1:
+  nothing to gain, and a weakly informative prior with a stated base model is easier to defend than a near-flat one.
+- Default pc.alphaw(5) is reported as a sensitivity analysis; 0.05 / 0.01 mentioned as giving identical results.
+- Methods text (draft, to adapt):
+  "The Weibull shape alpha was given a penalised-complexity prior (Simpson et al. 2017; van Niekerk et al. 2021) with the exponential model
+  (alpha = 1) as base model. Because duration dependence (alpha != 1) is one of the quantities of interest, we used a weakly informative rate
+  (lambda = 0.1) rather than the R-INLA default (lambda = 5), which concentrates prior mass near alpha = 1. With the default, the posterior
+  uncertainty of alpha in transitions with fewer than ~60 events was dominated by the prior (posterior SD ~0.05 regardless of sample size,
+  versus 0.14-0.28 from the likelihood alone). Results were insensitive to weaker priors (lambda = 0.05, 0.01: alpha within 0.004).
+  Results under the default prior are reported as a sensitivity analysis (Supplement S#): covariate hazard ratios were essentially unchanged
+  (median shift <= 0.14 posterior SD), whereas alpha was pulled toward 1 in sparsely observed transitions."
+- Optional for the Supplement: figure of the implied prior on alpha for lambda = 5, 1, 0.1.
+
+## TODO BEFORE THE FINAL ("gs") RUN -- handoff list 2026-10-23
+### A. Pipeline changes
+ A0. BACK UP the int tables first (04 overwrites visit_intervals.rds, transition_set.rds, plot_info.rds): copy to data/processed/int_tables/.
+     Diagnostic scripts 11, 13-21 need them (they check for cmi_sum).
+ A1. [done, not run] Growing-season CMI (cmi_gs = May-Oct) in 03z / covariate_spec / 05 / 07_redraw / 08 / 09-12.
+ A2. station_pe disturbance codes in 03 (currently only pee_ori_sond is read). Rule: add a station_pe code when it is NEW at a visit and
+     pee_ori_sond has no code at that visit; date by the lower-bound rule (station_pe has no year). Through ALL steps: 5 (CHT/DT truncation
+     incl. its BA-crash checks), 6 (flags), 6b (same-year / missing-year reclassification), 7 (carry-forward with epoch reset at a new
+     stand-origin event), 8 (TSD lower/upper bound); and in 04 the W_j rules (rule 3, W_j trick, undated-TSD exclusion).
+     DECISION NEEDED: origine codes only, or also perturb (partial cut CP, EL)? New station-only partial codes show >= 25% BA loss in 31-39%.
+ A3. Old-regen exclusion in 04: drop plots whose first state is regen and W_j >= 50 (458 plots in int). DECISIONS NEEDED: threshold (50?);
+     the 53 old plots with a recorded stand-replacing origin (keep with W_j = time since that disturbance, or exclude). Report counts.
+ A4. Alpha prior pc.alphaw(0.1) in EVERY INLA fit: stage-1/2 seed fits, the M_MI fits (05), redraws (07_redraw), 11.
+     model_fitting.R lives in the read-only simulation folder -> implement as a pipeline-side override (own copy/wrapper in R/), never edit
+     the simulation folder. Check that the explicit spec reproduces the default when set to 5 (as in script 20) before switching to 0.1.
+ A5. INLA threads: inla.setOption(num.threads = "1:1") for the fits in 05 / 07_redraw (currently only the posterior sampler sets it).
+     Reproducibility; not fully deterministic near numerical edges (script 20, 1b).
+ A6. After 04: compare with int (plots, intervals, events, kept transitions, term sets per transition). Station codes and the old-regen
+     exclusion WILL change counts and possibly which transitions/terms pass the >= 15-events rule. Record the new counts.
+ A7. Run order: 03 -> 03z -> 04 -> 05 -> 07_redraw -> 08 -> 09 -> 10 -> 12 (-> 11).
+ A8. Before interpreting 12: verify shade-tolerance values (Niinemets & Valladares 2006).
+ A9. Methods text: P2 is a deterministic moment-matched point (not a draw); screen partly post hoc (intercept rule); new counts; CMI definition;
+     prior; failed-fit replacement framing (see "Manuscript framing" above).
+
+### B. Sensitivity analyses (after the main gs run)
+ Post-hoc, no refit (script 10 exists):
+  S1 interactions restricted to >= 20 disturbed events; S2 pooling without fits with alpha-SD ratio < 0.5; S3 all valid fits instead of first 30.
+ Refit on the stored gs imputations (like script 11/13; new scripts needed unless noted):
+  S4 default prior pc.alphaw(5).
+  S5 within/between climate (script 11 exists, tag gs); report as Supplement (within-plot term confounded by calendar period).
+  S6 one plot per plot pair (spatial non-independence).
+  S7 exclude P1-fallback plots (~1%).
+  S8 old-regen threshold: keep old-regen plots, and/or W_j >= 30 (one plot alone shifted regen->fir alpha/pest terms up to 0.7 SE).
+  S9 regional random effect f(reg_eco, "iid") (needs INLA random effect; flag transitions with < 5 regions holding events).
+ Full new run (data/covariate definitions change; needs its own output tag AND its own processed tables, because 04 overwrites them):
+  S10 start-visit flags/TSD instead of end-visit (timing convention; negative TSD slopes in X->regen).
+  S11 TSD upper bound (TSD_SOURCE = imputed_prev in 04).
+  S12 hysteresis: state change only if the new dominant leads by >= 10% of BA (change in 02).
+  S13 W_j +/- one age class.
+ Diagnostics for the Supplement:
+  D1 failure table per transition (attempts, failures, reasons) from fit_validity_gs.csv.
+  D2 ignorability of replacement: MLE on failing vs working gs datasets for every transition with replacements.
+  D3 spatial autocorrelation of residuals on the MI datasets (Moran's I, correlogram, reg_eco dispersion).
+  D4 implied-prior figure (lambda 5 / 1 / 0.1).
+  D5 posterior predictive check (needs the trajectory simulator).
+  D6 real-design parametric bootstrap (bias/coverage on the real design; heavy: ~3 h per replicate).
+  D7 optional: coverage of the weak prior in simulation (copy of the simulation code into this project; simulation folder stays read-only).
+
+### C. Additions to the handoff list after re-reading the full conversation (2026-10-23)
+ Original audit (2026-10-20) status:
+  #1 P2 is a deterministic moment-matched point, not a draw (between-imputation variance understated; likely part of the simulation's
+     undercoverage). OPEN -- DECISION NEEDED: (a) keep (simulation-validated) + correct the Methods text + quantify with D6; or
+     (b) draw exits from the truncated Weibull (proper MI; departs from the validated method; P2 code is in the read-only simulation folder ->
+     would need a pipeline-side override). Text must be fixed either way (A9).
+  #2 08 script/output mismatch: FIXED (08 rewritten, no alpha correction).
+  #3 End-visit flags / lower-bound TSD: covered by S10 (start-visit) and S11 (upper bound).
+  #4 Intercept rule post hoc: for gs the references are frozen from m1-30 before any candidate (07_redraw); the Methods must still say the
+     rule was designed after seeing int failures. Selection on convergence: covered by D2 (ignorability).
+  #5 P1 simulates the pre-observation history with the first interval's covariates (incl. disturbance flags / TSD). OPEN: not addressed.
+     At least a stated limitation; optional sensitivity (P1 with disturbance flags/TSD switched off for the simulated history) -- P1 code is in
+     the read-only simulation folder -> pipeline-side override if done.
+  #6 Methods_draft.docx outdated: A9.
+ Other open items:
+  A10 Report the 62 plots (76 events) excluded because their disturbance cannot be dated, and the old-regen / station-code count changes.
+  P1  After the gs run: check cov_check_gs.csv (sampled alpha SD vs INLA's; in int ~10 sparse transitions were too narrow -- may change with
+      the weaker prior); list used fits with low alpha-SD ratio relative to their transition (screen blind spots: partly degraded fits pass,
+      alpha -> 0 collapse invisible to the ratio rule).
+  P2  Derived quantities script (composition at 10/25/50 y, start = every state at entry, optional actual-network start). Decisions still open:
+      missing terms (borrow synthesis means as main / set to 0 as sensitivity / coverage flag), harvest "any" by mixture, TSD cap at the
+      95th percentile, scenario semantics (flag on from t = 0, TSD = time since t = 0), warming scenario yes/no, covariate-support flags.
+  O1  Optional: descriptive split of heavy harvest into CT vs CPR/CPRS (hypothesis: careful logging favours return to fir; Brice 2020 contrast).
+  O2  Optional: exponential (alpha = 1) comparison model ("what a Markov model gets wrong" in sojourn times).
+  O3  Optional: send the minimal INLA example (17_htr_sim_grid, H >= 27) and the other_temperate->white_birch crash log to D. Rustand / INLA devs.
+  O4  Optional: pre-specify one life-history trait for E1 (e.g. longevity) instead of shade tolerance only.
+
+## CONSOLIDATED HANDOFF LIST v2 (2026-10-23, user-reviewed) -- SUPERSEDES sections A, B, C above
+Manuscript: Manuscript/Methods_draft.docx now ends with "Changes needed before finalising the Methods (status 2026-10-23)" (per-subsection
+changes + suggested wording; covers audit #1, #4, #5, #6 text). Original kept as Manuscript/Methods_draft_backup_2026-10-15.docx.
+
+### TODO before the weekend run
+ T1  Back up the int tables (visit_intervals.rds, transition_set.rds, plot_info.rds) to data/processed/int_tables/ before rerunning 04.
+ T2  [done] Growing-season CMI (cmi_gs, May-Oct).
+ T3  station_pe codes in 03 (all steps + 04 W_j rules). TO BE DETERMINED: stand-origin codes only, or also partial codes.
+ T4  Old-regen exclusion in 04. TO BE DETERMINED: threshold (W_j >= 50?) and the 53 old plots with a recorded stand-replacing origin.
+ T5  Prior pc.alphaw(0.1) in ALL INLA fits, including the stage-1/2 seed fits (user decision). Pipeline-side override (simulation folder is
+     read-only); first check that the override with strength 5 reproduces the default.
+ T6  One thread per INLA fit (num.threads "1:1") in 05 and 07_redraw.
+ T7  P2: keep the deterministic moment-matched point for this run (user decision); document as a limitation; drawing from the truncated
+     Weibull to be explored later (optional item X3).
+ T8  After 04: compare counts with int (plots, intervals, events, kept transitions, terms per transition); record them.
+ T9  Run order: 03 -> 03z -> 04 -> 05 -> 07_redraw -> 08 -> 09 -> 10 -> 12 (-> 11).
+### After the run
+ R1  Rewrite Methods per the list in Methods_draft.docx (incl. audit #4 intercept rule designed post hoc, #6 outdated draft, #1 P2, #5 P1).
+ R2  Report exclusions: 62 plots (76 events) with undatable disturbance; old-regen count; station-code changes. (was A10)
+ R3  Checks: cov_check_gs.csv (sampled alpha spread vs INLA's); list used fits with low alpha-SD ratio relative to their transition. (was P1)
+ R4  Verify shade-tolerance values in 12 (Niinemets & Valladares 2006).
+ R5  Derived-quantities script (composition 10/25/50 y; start = every state at entry). Open decisions: missing terms, harvest mixture, TSD cap,
+     scenario semantics, warming scenario, covariate-support flags. (was P2)
+### Sensitivity analyses (S) -- after the main run
+ S1-S3 post-hoc pooling variants (script 10): interactions >= 20 events; without fits with alpha-SD ratio < 0.5; all valid fits.
+ S4 default prior pc.alphaw(5) | S5 within/between climate (script 11) | S6 one plot per pair | S7 without P1-fallback plots |
+ S8 old-regen threshold (keep / W_j >= 30) | S9 regional random effect (reg_eco)          -- refits on the stored gs imputations
+ S10 start-visit flags/TSD | S11 TSD upper bound | S12 hysteresis (>= 10% BA margin) | S13 W_j +/- one age class
+                                                                                          -- full new runs, own tag + own processed tables
+### Supplement diagnostics (D)
+ D1 failure table | D2 neutrality of replacements (MLE failing vs working datasets) | D3 residual spatial autocorrelation on the MI datasets |
+ D4 implied-prior figure (lambda 5/1/0.1) | D5 posterior predictive check | D6 real-design parametric bootstrap (heavy) |
+ D7 optional: coverage of the weak prior in a simulation copy.
+### Optional (X)
+ X1 exponential (alpha = 1) comparison model (what a Markov model gets wrong).   X2 pre-specify one life-history trait for the alpha synthesis.
+ X3 P2 exits drawn from the truncated Weibull (proper MI) instead of the fixed point.  X4 P1 sensitivity with disturbance flags/TSD off for
+    the simulated pre-observation history (audit #5).
+ Dropped by user: heavy-harvest CT vs CPR split; contacting D. Rustand with the minimal example.
+
+### v2 amendments (2026-10-23, later)
+ R2 clarified: 04 already saves wj_table.rds (plots without stand age) and tsd_excluded_plots.rds (62 plots with undatable disturbance) and
+    prints counts. TO IMPLEMENT with T3/T4: log/save the old-regen exclusions and the station-code additions, and write one exclusion-flow
+    table (plots / intervals / events removed per rule) for the Methods/Supplement.
+ Added sensitivities:
+  S13 extended: W_j age-class mapping incl. old-growth codes without a range (VIN/VIR currently 100 y; JIN/JIR 50 y): alternative values.
+  S14 Stage-1 entry fraction W/4 and 3W/4 instead of W/2 (simulation stepB Section 15: it matters for alpha and is not washed out by stage 2).
+      Full new run.
+  S15 regeneration basal-area threshold (e.g. 3 or 4 m2/ha instead of 5): reclassification from 02, full new run. Lower priority.
+  S16 without the 177 plots whose soil PC scores were imputed (nearest donor, 03b). Refit on stored imputations.
+  S17 term-inclusion threshold 20 instead of 15 events for all disturbance terms (covers the harvest fallback). Refit on stored imputations.
+ Not added: alpha corrected with simulation-derived factors (tuned to simulation truth, not transferable; weak prior addresses part of it).
+ NEW PRIORITY DIAGNOSTIC D8 -- interaction attenuation under MI (simulation chat 2026-10-14, stepE): interactions and TSD terms were biased
+  toward/below the truth in every case (true +0.2; bias -0.15 to -0.19 at N >= 200, not fixed by M = 100); main disturbance effects unaffected;
+  alpha/intercept also affected (coverage collapse at N = 2000). The simulation only had POSITIVE true interactions, so "toward zero" and
+  "downward" cannot be told apart. The real harvest x GDD interactions are NEGATIVE -> must check that the method cannot create negative
+  interactions from true zero ones. Check: simulation with true interaction 0 and negative values (copy of the simulation code in this
+  project, or within D6 on the real design). Report interactions with the attenuation caveat (decided earlier) until then.
+
+## FINAL HANDOFF LIST v3 (2026-10-23) -- SUPERSEDES v2 and its amendments
+### Before the weekend run
+ T1 Back up int tables (visit_intervals.rds, transition_set.rds, plot_info.rds) -> data/processed/int_tables/.
+ T2 [done] Growing-season CMI.
+ T3 station_pe codes in 03 (all steps) + 04 W_j rules + log counts. TBD: stand-origin only or also partial codes. NOTE: station-only partial
+    codes at a first visit without a year will hit 04's undatable-TSD exclusion (currently 62 plots) -> check how many plots that adds.
+ T4 Old-regen exclusion in 04 + log counts. TBD: threshold (W_j >= 50?), the 53 old plots with a recorded origin.
+ T5 pc.alphaw(0.1) in all INLA fits incl. stage-1/2 seed fits (override; check strength 5 = default first).
+ T6 num.threads "1:1" for fits in 05 / 07_redraw.
+ T7 P2 kept as deterministic point (limitation; X3 later).
+ T8 Exclusion-flow table (plots/intervals/events removed per rule: no stand age, undatable disturbance, old regen, CHT/DT truncation).
+ T9 After 04: compare counts with int; record.
+ T10 Run order 03 -> 03z -> 04 -> 05 -> 07_redraw -> 08 -> 09 -> 10 -> 12 (-> 11).
+### After the run
+ R1 Methods rewrite (list at the end of Manuscript/Methods_draft.docx). R2 report the exclusion flow (T8). R3 checks: cov_check_gs.csv,
+ low-ratio used fits. R4 shade-tolerance values. R5 derived-quantities script (open decisions listed in v2).
+### Sensitivities
+ Post-hoc (script 10): S1 interactions >= 20 events | S2 without alpha-SD ratio < 0.5 | S3 all valid fits.
+ Refit on stored gs imputations: S4 default prior | S5 within/between climate (script 11) | S6 one plot per pair | S7 without P1-fallback plots |
+  S8 old-regen threshold | S9 reg_eco random effect | S16 without imputed-soil plots (177) | S17 term threshold 20 events.
+ Full new runs (own tag + own processed tables): S10 start-visit flags/TSD | S11 TSD upper bound | S12 hysteresis | S13 W_j age mapping
+  (incl. VIN/VIR, JIN/JIR values; +/- one class) | S14 stage-1 entry fraction W/4, 3W/4 | S15 regen BA threshold (lower priority).
+### Diagnostics (Supplement)
+ D1 failure table | D2 neutrality of replacements | D3 spatial autocorrelation on MI datasets | D4 implied-prior figure | D5 posterior predictive
+ check | D6 real-design bootstrap (heavy) | D7 weak-prior coverage (optional) | D8 PRIORITY: interaction attenuation with true interaction 0 / < 0.
+### Optional
+ X1 exponential comparison model | X2 pre-specified life-history trait | X3 P2 exits drawn from truncated Weibull | X4 P1 without disturbance
+ flags/TSD for the simulated pre-history.
+
+## FINAL HANDOFF LIST v4 (2026-10-23) -- SUPERSEDES v3 (same content, regrouped; simulation tests separated)
+ Correction to v3 T3 note: adding station_pe codes can only ADD flags (station_pe has no year, so it cannot date existing undated codes).
+ A station-only PARTIAL code already present at a plot's first visit has no lower bound (no earlier visit), so 04's rule would exclude that
+ plot -> the 62 can only grow. T3 design choice: apply 04's rule consistently (exclude those plots) or only add station codes that appear
+ new at a visit after the first (no increase). Report the count either way.
+ Real-data diagnostics: D1 failure table | D2 neutrality of replacements | D3 spatial autocorrelation on MI datasets | D4 implied-prior figure |
+  D5 posterior predictive check.
+ Simulation tests (in a COPY of the simulation code inside this project; the simulation folder stays read-only):
+  SIM1 PRIORITY interaction attenuation: true interaction 0 and negative (can the method create spurious negative interactions?).
+  SIM2 real-design parametric bootstrap (was D6): simulate from the pooled gs estimates on the real plots/visits/W_j/covariates, rerun the
+       pipeline, measure bias and coverage (heavy, ~3 h per replicate).
+  SIM3 coverage of the weak prior pc.alphaw(0.1) (was D7).
+  SIM4 (optional, needed before X3) P2 exits drawn from the truncated Weibull vs the fixed point: bias and coverage.
+ Check 2026-10-23 (station_pe dates): confirmed station_pe has NO year field (54 columns; PEP dictionary lists AN_ORIGINE / AN_PERTURB only for
+ PEE_ORI_SOND). No pee row has a year without a code at the same visit. But 1,008 of the 2,824 station-only origine visits are in plots where
+ pee_ori_sond records an origine WITH a year at another visit (upper bound; same code/event not checked) -> T3 option: borrow that year when
+ it is the same event (same disturbance class, year compatible with the visit bracket); otherwise lower-bound dating.
+ Station-only PARTIAL codes in the analysed (int) plots, by position (pee_ori_sond has no partial code at that visit):
+   first visit: 1,040 plots (555 partial cut, 457 EL, 28 BRP); 661 of these plots have a state change somewhere, 321 in their first interval
+   later visit, NEW: 1,857 visits / 1,784 plots (989 partial cut, 801 EL, 67 BRP); 576 coincide with a state change in that interval
+   later visit, repeat of the previous visit's code: 1,071 visits; 286 with a state change in that interval
+ -> Excluding first-visit cases would remove ~1,040 plots (~9%): for T3 prefer ignoring first-visit station partial codes (or borrowing a pee year).
+ Codes export used: data/processed/diagnostics/pep_codes_both_layers.csv (both layers, codes + pee years).
+ Immediately-after counts (int data; state change in the interval right after/containing the disturbance):
+   A first-visit undated station-only partial codes: 1,040 codes -> 321 changes in interval 1, 84 already flagged same type -> <= 237 new flags
+   B new station-only partial codes at later visits: 1,857 codes -> 576 changes in that interval, 246 already flagged -> 330 new flags
+ PROPOSAL for T3 (not yet decided): B like pee_ori_sond (lower-bound dating). For undated partial codes at a plot's FIRST visit, from BOTH
+ layers: (a) main = do not flag (symmetric; rescues the 62 currently excluded plots; at most 237 changes lose a flag); sensitivities (cheap,
+ refit on stored imputations): (b) flag them with lower-bound TSD = 0 at the first visit; (c) drop those plots (= current pee rule). Rationale:
+ a pre-observation partial disturbance of unknown timing cannot be placed on the TSD axis; P1 likewise ignores pre-observation disturbance.
+ DECISION (user, 2026-10-23): T3 partial codes -- new partial codes at later visits from both layers, dated by the lower-bound rule;
+ undated partial codes present at a plot's FIRST visit (both layers) are NOT flagged and the plot is kept (replaces 04's exclusion of the
+ 62 plots). Concern (pre-observation disturbance still affecting the stand -> mislabelled undisturbed) tested by
+   S18a flag them with TSD = 0 at the first visit | S18b drop those plots (old rule) -- refits on the stored gs imputations.
+ Still open for T3: stand-origin codes from both layers (stand-age rule at first visits) -- does severe outbreak (ES) at a first visit get the
+ stand-age rule like fire/clear-cut, or "not flagged"?
+
+## FINAL HANDOFF LIST v5 (2026-10-23, end of session) -- COMPLETE; SUPERSEDES ALL EARLIER LISTS (A/B/C, v2, v3, v4)
+Background for every item is in the sections above (INLA failures 2026-10-22, prior tests 2026-10-23, station_pe checks 2026-10-23).
+Manuscript change list: end of Manuscript/Methods_draft.docx ("Changes needed before finalising the Methods"); original in
+Methods_draft_backup_2026-10-15.docx. Diagnostic scripts 11 and 13-21 need the int tables (T1).
+
+### Before the weekend run
+ T1  Back up the int tables (visit_intervals.rds, transition_set.rds, plot_info.rds, wj_table.rds, tsd_excluded_plots.rds) to
+     data/processed/int_tables/ before rerunning 04.
+ T2  [DONE, REVISED 2026-10-24] Growing-season CMI: cmi_gs is now matched to the NRCan growing season (= window of gdd_3), built in 03c
+     step 4b; the fixed May-Oct sum of 2026-10-22 is replaced. See "T2 revision 2026-10-24".
+ T3  station_pe disturbance codes in 03 (steps 5, 6, 6b, 7, 8) and 04 (W_j rules, TSD). Decided rules:
+      - stand-origin (origine) codes from both layers: year where pee has one; new at a later visit -> lower-bound dating;
+        at the first visit -> stand-age rule (TSD = W_j + years since first visit), as 04 does now for pee fire/harvest;
+      - partial (perturb) codes NEW at a later visit, both layers -> lower-bound dating (as for pee now);
+      - undated partial codes present at a plot's FIRST visit, both layers -> NOT flagged, plot kept (replaces 04's exclusion of 62 plots);
+      - station CHT/DT (207 visits without a pee code) -> same truncation rule incl. BA checks;
+      - log all counts.
+     OPEN: (i) severe outbreak ES at a first visit: stand-age rule like fire/clear-cut, or not flagged? (04's rule currently covers fire and
+     harvest only). (ii) Recommended, not yet confirmed: give a station code the pee year when pee records the same event (same class, year
+     compatible with the visit bracket) at another visit (<= 1,008 cases).
+ T4  Old-regen exclusion in 04 (first state regen and W_j >= threshold; 458 plots at 50 in int) + log counts.
+     OPEN: threshold (50?); the 53 old plots with a recorded stand-replacing origin (keep with W_j = time since that disturbance, or exclude).
+ T5  pc.alphaw(0.1) in ALL INLA fits incl. the stage-1/2 seed fits. model_fitting.R is in the read-only simulation folder -> pipeline-side
+     override. First check that the override with strength 5 reproduces the default (as script 20, part 1a; tolerance 1% of a posterior SD).
+ T6  inla.setOption(num.threads = "1:1") for the fits in 05 and 07_redraw.
+ T7  P2 stays the deterministic moment-matched point (decided); documented as a limitation (X3 / SIM4 later).
+ T8  Exclusion-flow table: plots / intervals / events removed per rule (no stand age, CHT/DT truncation, old regen, any remaining
+     undatable-disturbance exclusions).
+ T9  After 04: compare with int (plots, intervals, events, kept transitions, terms per transition); record the new counts here.
+ T10 Run order: 03 -> 03b -> 03c -> 03z -> 04 -> 05 -> 07_redraw -> 08 -> 09 -> 12 (02 too if states change); then R/sensitivity/10 and 11.
+
+### After the run
+ R1  Rewrite the Methods (list in Methods_draft.docx; covers audit #1 P2, #4 post-hoc intercept rule, #5 P1 pre-history covariates, #6).
+ R2  Report the exclusion flow (T8) and the station-code additions.
+ R3  Checks: cov_check_gs.csv (sampled alpha spread vs INLA's); used fits with a low alpha-SD ratio relative to their transition.
+ R4  Verify the shade-tolerance values in 12 (Niinemets & Valladares 2006).
+ R5  Derived-quantities script (composition at 10/25/50 y, start = every state at entry). Open: missing terms (borrow synthesis means /
+     set 0 / flag), harvest "any" by mixture, TSD cap (95th percentile), scenario semantics, warming scenario, covariate-support flags.
+ D1  Failure table per transition (attempts, failures, reasons).
+ D2  Neutrality of replacements: MLE on failing vs working gs datasets for every transition with replacements (diagnostic only).
+ D3  Residual spatial autocorrelation on the MI datasets (Moran's I, correlogram, reg_eco dispersion).
+ D4  Implied-prior figure (lambda 5 / 1 / 0.1).
+ D5  Posterior predictive check (needs the trajectory simulator).
+
+### Sensitivity analyses
+ Post-hoc, script 10:      S1 interactions >= 20 disturbed events | S2 without fits with alpha-SD ratio < 0.5 | S3 all valid fits.
+ Refit on stored gs imputations (new scripts unless noted):
+  S4 default prior pc.alphaw(5) | S5 within/between climate (script 11) | S6 one plot per plot pair | S7 without P1-fallback plots |
+  S8 old-regen threshold (keep them / W_j >= 30) | S9 regional random effect f(reg_eco, "iid") | S16 without the 177 imputed-soil plots |
+  S17 term threshold 20 instead of 15 events (also changes harvest fallbacks) |
+  S18a undated first-visit partial codes flagged with TSD = 0 | S18b plots with such codes dropped (old rule).
+ Full new runs (own output tag AND own processed tables, since 04 overwrites them):
+  S10 start-visit flags/TSD | S11 TSD upper bound (TSD_SOURCE = imputed_prev) | S12 hysteresis (>= 10% BA margin, 02) |
+  S13 W_j age mapping (old-growth VIN/VIR = 100 and JIN/JIR = 50 alternatives; +/- one class) | S14 stage-1 entry fraction W/4, 3W/4 |
+  S15 regeneration BA threshold 3-4 m2/ha (lower priority).
+
+### Simulation tests (in a COPY of the simulation code inside this project; simulation folder stays read-only)
+ SIM1 PRIORITY interaction attenuation with true interaction 0 and negative (can the method create spurious negative interactions?).
+ SIM2 real-design parametric bootstrap (bias/coverage on the real design; ~3 h per replicate).
+ SIM3 coverage under pc.alphaw(0.1).
+ SIM4 P2 exits drawn from the truncated Weibull vs fixed point (needed before X3).
+
+### Optional
+ X1 exponential (alpha = 1) comparison model | X2 pre-specified life-history trait for the alpha synthesis |
+ X3 P2 exits drawn (after SIM4) | X4 P1 with disturbance flags/TSD off for the simulated pre-observation history (audit #5).
+ Dropped (user): heavy-harvest CT vs CPR split; contacting D. Rustand.
+
+## Corrections to OUTDATED statements in the dated sections above (checked 2026-10-23)
+ - "Decisions made": "Plots must never be dropped because P1 finds no candidate path ... TO IMPLEMENT" -> implemented 2026-10-15 (entry W_j/2, flagged).
+ - "Open / to decide": historical. Flags at END visit = main analysis (start visit = S10); continuous set is gdd_3, cmi_gs, soil_pc1.
+ - 2026-10-15: "Pooling still lacks Barnard-Rubin df and log-scale alpha" -> implemented the same day (pool_all).
+ - 2026-10-19: "COV_CONT final (gdd_3, cmi_sum, soil_pc1)" -> cmi_sum replaced by cmi_gs (2026-10-22).
+ - 2026-10-19: 62 plots with undated first-visit partial disturbances EXCLUDED -> replaced by the T3 decision (not flagged, plot kept; S18a/b).
+ - 2026-10-19: "Open observation, NOT checked: station_pe" -> checked 2026-10-22/23 (see station_pe sections; T3).
+ - 2026-10-20: "no MLE comparison exists for healthy fits" and "ignorability ... Not proven" -> done 2026-10-22 (healthy betas agree with MLE;
+   black_spruce->regen replacements neutral; regen->fir not neutral, resolved by the old-regen exclusion).
+ - 2026-10-20: "Why the rate fell from 33% to 12% ... UNEXPLAINED" -> partly explained: failure is triggered by an extreme-H(tr) row whose
+   presence rotates with the imputation, and outcomes near that edge depend on run context/threading (scripts 15, 18, 20 part 1b).
+ - 2026-10-20: "09/10 NOT yet run" -> 09 was run (12 uses hazard_ratios_int.csv); 10 status unknown.
+ - 2026-10-22: "Check after 04: transition counts identical to int" -> no longer true (station codes, old-regen exclusion): see v5 T9.
+ - 2026-10-22: "06g: dropping high-H(tr) rows does NOT cure" -> contradicted by script 16 (dropping the one extreme regen->fir plot cures 25/25).
+
+## Findings and decisions of the 2026-10-20 to 2026-10-23 review session NOT recorded elsewhere in this file
+ Paper scope (user): ONE ecology paper (no separate methods paper). Main results = covariate effects (climate, disturbance, GDD x disturbance
+  interactions, TSD); alpha = secondary result (early- vs late-successional duration dependence). Climate is framed as SPACE-FOR-TIME
+  (95.4% of GDD and 97.4% of CMI variance is between plots; bioclimatic domain alone absorbs 78% of GDD); mechanistic warming projections are
+  Chapter 3 (LANDIS-II). Seed-source proxy: not done (user). Plot frailty: not fitted (only 48 of 8,755 plot x transition combinations have >= 2 events).
+ Spatial autocorrelation diagnostic (int, one simple imputation, not the MI datasets): residual Moran's I significant in 45/91 transitions
+  (all 7 with > 200 events); residual correlation 0.125 at 0-2 km, ~0.02 at 10-25 km (paired plots); reg_eco observed/expected dispersion 2.42.
+  SEs possibly 5-15% too small (design-effect guess, not measured) -> S6, S9, D3.
+ Reversals: 11.6% of changes reverse at the next change; among non-regen pairs 529 of 4,575 (fir<->white_birch 96); 68% of intermediates seen at
+  one visit only; 61% have a top-vs-second BA margin < 0.10 (11% of stable visits); 48% of non-reversing changes also end with margin < 0.10 -> S12.
+ Script 11 (within/between climate, int): within-plot GDD deviation is mostly calendar time (r = 0.94 with year, R2 0.89; 1980s coolest decade),
+  meta-regression slope within-on-between 0.01 (-0.24 to 0.25) -> the test is confounded by period (budworm decade); report in the Supplement only.
+ Script 12 (cross-transition synthesis, int; WILL CHANGE with the gs run and the new prior): GDD effect vs destination thermal affinity
+  (between states) slope 1.14 (p 2e-12; robust subset 1.00), regen exits 0.91; CMI n.s.; soil 0.38. Disturbance between states: pest 1.95,
+  light harvest 1.51, any harvest 1.52, fire n.s.; to-regen 8.6. GDD x disturbance overall 0.81 (p = 0.10): light harvest 0.48 (p 7e-5), heavy
+  0.69 (p 0.03), fire/pest n.s.; regen exits 0.53 (p 0.009) -> harvest-specific, not general (an earlier vote-count claim of general antagonism was
+  wrong). TSD fades only for to-regen (fire 0.70, harvest 0.77 per decade; possibly the end-visit convention). alpha vs shade tolerance n.s.
+  (slope -0.025, p 0.60; shade values typed from memory -> R4); alpha by origin: regen 1.77, fir 1.63, aspen 1.22, black spruce 1.18,
+  white birch 1.14, sugar maple 0.91, cedar 0.95 (default prior!).
+ Old-regen exclusion changes regen-exit covariates (MLE, 3 imputations): regen->black_spruce GDD log HR 1.05 -> 0.31, GDD x fire -0.69 -> +0.30,
+  GDD x heavy harvest -0.85 -> -0.10 -> earlier regen-exit interaction results are unreliable until the final run.
+ Comparison with Brice et al. 2020 (qualitative): light vs heavy harvest contrast recovered (light harvest promotes fir->yellow_birch / red_maple);
+  heavy harvest also returns stands to fir (regen->fir 3.11, hardwood->fir), not only to pioneers; harvest x GDD interaction is new;
+  CMI signs differed with annual CMI (reason for the cmi_gs change); pest separated from fire/wind (budworm signal).
+ Derived quantities (concept agreed): sojourn survival and cumulative incidence (first move only, exact) vs state composition (all moves,
+  simulated, clock reset at each move); start from every state at entry (time in state 0); horizons 10/25/50 y; conditional scenarios, not forecasts.
+ Script inventory: pipeline 02, 03, 03b, 03c, 03z, 04, 04b, 05a, 05, 07_redraw, 08-12, covariate_spec.R. Archived (int only): 07_redraw_failed,
+  07b, 07c, 07_redraw_failed_wholeimputation, R/archive/_archive_pre_gs/. Diagnostics (need the int tables): 06*-series (older), 13 old regen,
+  14 station codes, 15 ablation, 16 H(tr) one-plot + simulation, 17 H(tr) grid simulation, 18 sparse failures, 19-21 prior tests.
+
+### v5 addition (2026-10-24): R folder reorganisation + scripts still missing
+ T11 [DONE 2026-10-24, see "Folder structure of R/" at the top] Reorganise R/ (user request): main pipeline stays in R/; tests/diagnostics -> R/tests/; proposed also R/sensitivity/ (10, 11 and future S
+     scripts) and R/archive/ (07_redraw_failed*, 07b, 07c, _archive_pre_gs/). Moving is safe for sourcing: tests only source 04b_build_rows.R,
+     05a_fit_funs.R, covariate_spec.R (via here("R", ...)) and the simulation's model_fitting.R. Update the run commands in the script headers.
+     Main: 02, 03, 03b (soil only, despite its name), 03c, 03z, 04, 04b (functions), covariate_spec (functions), 05a (functions), 05, 07_redraw,
+     08, 09, 12. Sensitivity: 10, 11. Tests: 04c, test_split_vs_collapsed, test_fit_mock, 06a-06z, 13-21. Empty stub: 06_inspect_plot.R (64 bytes).
+     Several headers still carry old file names (02 "classify_pep_states.R", 03 "pep_disturbance_covariates.R", 03b "pep_soil_climate_covariates.R",
+     03z "06_combine_covariates.R").
+ Missing scripts (to add):
+  main:  00_run_all.R (front-to-end driver) | pipeline-side fit_inla_models override with pc.alphaw(0.1) + 1 thread (T5/T6) |
+         exclusion-flow table (T8) | derived quantities + trajectory simulator (R5) | posterior predictive check (D5, same simulator) |
+         manuscript figures and tables (none exist yet) | config file with all switches (RUN_TAG, processed-data dir per tag, flag timing,
+         TSD_SOURCE, BA_REGEN, W_j age mapping, stage-1 entry fraction, MIN_EVENTS, prior strength) so sensitivity runs = config + tag.
+  sensitivity: one refit-on-stored-imputations script with variants (S4, S6, S7, S8, S9, S16, S17, S18a/b); full runs S10-S15 via the config.
+  diagnostics: D2 neutrality of replacements (MLE, gs) | D3 spatial autocorrelation (was done ad hoc outside the project) | D4 implied-prior figure.
+  simulation: SIM1-SIM4 (copy of the simulation code into this project).
+
+## Session 2026-10-24: decisions and progress on the "Before the weekend run" items
+Decisions (user, 2026-10-24):
+ - T3 (ii) APPROVED: a station_pe code takes the pee_ori_sond year only under a strict match: same disturbance type (fire/harvest/pest)
+   AND same level (origine/perturb) AND pee year in (previous visit year, this visit year]. Otherwise lower-bound dating. Log matched cases.
+ - T3 (i) / new T3c: ES occurs ONLY in the origine column (raw export: 535 pee rows, 755 station rows, 0 in perturb), is listed in 03 as
+   pest_o (stand-origin pest). ES is NOT excluded and NOT treated differently: the first-visit stand-age (W_j) trick in 04 is made symmetric
+   for all three types (fire, harvest, pest). Found: 04 currently fills only tsd_fire and tsd_harv (written 2026-10-19 when the 10 first-visit
+   origine plots were 1 BR + 9 CT), so an undated first-visit ES would, by the code, be excluded as undatable -- an oversight. UNEXPLAINED:
+   the int exclusion list (62 plots: 44 CP, 1 CE, 17 EL) contains no ES plot; to be checked by running 03/04 on staged data.
+   Add a guard in 04: stop if any first-visit origine code is left without a TSD.
+ - Order of operations in 03 confirmed from the code: step 6 marks 0/1/2 levels per type; step 7 carries forward at full level within epochs
+   (any origine of any type, incl. ES, starts a new epoch and resets all three types); step 8 dates episodes; only then fire and pest are
+   collapsed to 0/1 (fire_bin, pest_bin); harvest keeps 0/1/2. Collapsing rationale (user): few partial fires, few stand-replacing pest events.
+ - T3e NEW: TSD source = MIDPOINT of `imputed` (lower bound) and `imputed_prev` (upper bound) for the main analysis (reverses decision A of
+   2026-10-19). Lower and upper bounds become full-run sensitivities (S11 now covers both).
+ - T4 (old-regen threshold, the 53 plots with a recorded origin): DEFERRED by the user until the item is reached.
+ - Threads (T6): one thread per INLA call costs wall-clock time per fit only (no statistical change); with 6 workers total runtime should be
+   similar -- not measured.
+T1 DONE 2026-10-24: copied visit_intervals.rds, transition_set.rds, plot_info.rds, wj_table.rds, tsd_excluded_plots.rds (all dated 2026-10-19,
+ = int build) to data/processed/int_tables/; md5 checksums identical to the originals. NOTE: the diagnostic scripts (04c, 13-16, 18-21) still
+ read data/processed/*.rds, not int_tables/ -> after 04 is rerun they will read the NEW tables unless their paths are pointed to int_tables/.
+T0 DONE 2026-10-24 (config + tagged tables; user-approved):
+ - New R/config.R: RUN_TAG "main", TABLE_DIR = data/processed/tables_<RUN_TAG>/, FIT_DIR = data/processed/fit_<RUN_TAG>/, INT_TABLE_DIR = tables_int/.
+ - Sourced by 04, 05, 07_redraw, 08, 09, 12, R/sensitivity/10, 11, R/tests/04c; their local RUN_TAG/OUT_DIR lines removed. 04 writes its five
+   tables to TABLE_DIR and transition_set_<RUN_TAG>.csv to data-output/data/; 05, 07_redraw, 11 call prepare_fit_inputs(TABLE_DIR); 09, 12 read
+   transition_set / visit_intervals from TABLE_DIR.
+ - data/processed/int_tables/ renamed to tables_int/. Diagnostics 13-16, 18-21 now read tables_int/ (their own RUN_TAG "int" / fit_int/ unchanged).
+   06a-06z untouched (older run, still read data/processed/). The old untagged data/processed/*.rds stay; no main/sensitivity script reads them.
+ - Correction: script 11 already wrote fit_wb_<RUN_TAG>/ (only its header said fit_wb/; header fixed). No collision with the int-era fit_wb/.
+ - Originals copied to R/archive/_archive_pre_main/ (17 files).
+ - TESTED (cloud R 4.3.3): all 18 edited files parse; config resolves the three paths; grep: no RUN_TAG assignment outside config.R, no
+   main/sensitivity/04c read of data/processed/<table>.rds. NOT TESTED: 04 actually writing to tables_main/ and 05 reading it (needs the data;
+   planned with the baseline run).
+LAYOUT CHANGE DONE 2026-10-24 (user-approved; see "Run tags and folder layout" at the top):
+ - R/config.R rewritten (BUILD_DIR, BUILD_SUM_DIR, TABLE_DIR, DIAG_DATA_DIR, RUN_OUT_DIR, FIT_DIR, RESULTS_DIR, SENS_DIR, FIG_DIR, DIAG_OUT_DIR,
+   INTTEST_TABLE_DIR, INTTEST_FIT_DIR). Now also sourced by 02, 03, 03b, 03c, 03z.
+ - Scripts edited: 02, 03, 03b, 03c, 03z, 04, 05, 07_redraw, 08, 09, 12, sensitivity/10, 11, tests/04c, 13-21 (paths + header comments).
+   08/09/12 write to RESULTS_DIR; 09/10/11/12 read fit_validity / pooled_final / hazard ratios from RESULTS_DIR and mi_raw / extras / scaling
+   from FIT_DIR; 10 writes to SENS_DIR, 11 to SENS_DIR/wb. Originals in R/archive/_archive_pre_layout/ (24 scripts + gitignore.txt).
+ - Files moved (no deletions; mv -n). Counts checked after the move: inttest fits 270 files (128 extras_int_m*), noint 113, wb 161.
+   The five untagged data/processed tables were byte-identical (md5) to the tables_int backup before being archived.
+ - .gitignore: added the generated folders (see layout).
+ - Empty folders left behind (deleting is not allowed from here; user can remove): data/processed/ (+ diagnostics/), data/covariates/pep/,
+   data-output/data/ (only .gitkeep).
+ - Found, NOT moved: data/raw/covariates/_tmp_ce_plots_full.csv, _tmp_disturbance_codes.csv, _tmp_station_pe_codes.csv (look like debris
+   from earlier sessions; in raw/). "Claude outputs/" at the project root not inspected.
+ - TESTED (cloud R 4.3.3, staged copies): all 24 edited scripts parse; config resolves every directory; in every script config is sourced
+   before the first use of a config variable; grep: no reference to data/processed, data/covariates, data-output/data, fit_int, fit_wb or
+   tables_int left in main/sensitivity/04c/13-21 (only 06a-06z, test_*, archive). inttest fits exist at the new path.
+   NOT TESTED: any script actually run end to end on the new layout (next step: baseline run of 03 -> 04 in the cloud).
+
+## T2 revision 2026-10-24: cmi_gs matched to the gdd_3 growing season (user decision)
+Why: gdd_3 is NRCan period 3 = the full growing season, plot- and year-specific (start: mean daily T >= 5 C for 5 consecutive days from
+ 1 March; end: mean minimum T < -2 C from 1 August; source cfs.nrcan.gc.ca/projects/3/9). cmi_gs was a FIXED May-Oct sum. Drought stress
+ acts while trees transpire, so both climate covariates should describe the same window. Off-season CMI is ~precipitation (PET ~0);
+ a pre-season recharge effect would need a separate term (not proposed).
+Checks on climate_by_year_raw.rds (717,835 plot-years, 1960-2022):
+ - length_gs = end_gs - start_gs + 1 in 100% of rows (inclusive day-of-year); gdd_3 = gdd_2 + gdd_4 exactly; pcp_3 = pcp_2 + pcp_4 (<= 0.1 mm);
+   mean gdd_1 = 1.8 (pre-season). Consistent with the NRCan period definitions. NOT checkable: that gdd_3 is summed over exactly
+   start_gs..end_gs (no daily data; rests on NRCan's documentation).
+ - Season start median DOY 127 (IQR 119-136), end median 297 (IQR 289-303). 29.9% of plot-years start before 1 May, 18.5% end after 31 Oct;
+   36.6% have season days outside May-Oct. Share of May-Oct outside the season: median 7.6%, 95th pct 26.6% (short-season plots).
+ - Plot-level correlations: GS-matched vs May-Oct 0.953; with gdd_3: GS-matched -0.61, May-Oct -0.80, May-Sep -0.82. Visit level (10-yr
+   windows): GS-matched vs May-Oct 0.947; with gdd_3 -0.53 vs -0.75. => part of the CMI-GDD collinearity came from the fixed window.
+Definition (03c step 4b, per plot-year, BEFORE the 10-yr averaging): cmi_gs = sum_m cmi_m x (days of month m inside [start_gs, end_gs]) /
+ (days in month m); month boundaries from each year's own calendar (leap years shift day-of-year after February); months with weight 0 are
+ ignored. Assumption: CMI spread evenly within a partial month (only the first and last month of the season are partial).
+Code: R/03c_build_climate_covariates.R step 4b (function cmi_gs_matched + log line); R/03z_combine_covariates.R keeps cmi_gs from 03c
+ (May-Oct sum removed; stopifnot if cmi_gs is missing); covariate_spec.R comment. Name cmi_gs unchanged, so 04-12 need no change.
+ Originals: R/archive/_archive_pre_layout/*.pre_cmigs.R.
+TESTED (cloud R 4.3.3; the real 03c and 03z run end to end on copies of data/build/; PEP.gpkg (739 MB, above the copy limit) replaced by a
+ stand-in placette layer with the same 11,469 plot ids and dummy coordinates -- valid because 03c uses the plot locations only inside the
+ download/extract loop, which is skipped when all years are in the checkpoint):
+ - function: hand example reproduced (plot 8901804502, 1988 = leap year: 27.14); weighted days == length_gs in every row; weights in [0,1];
+   seasons reaching April/November get weight there (219,743 / 129,579 rows); NA start -> NA; NA in an off-season month -> ignored.
+ - 03c: ran (5.7 min, no downloads; checkpoint md5 unchanged); 48,012 visits, 0 NA cmi_gs; visit-level cmi_gs == independent
+   recomputation (500 random visits, max diff 0). All other 33 columns equal the existing climate_covariates.rds up to 8.9e-16
+   (last-bit floating point; likely R version / summation order -- not confirmed, irrelevant at that size).
+ - 03z: ran; 48,012 rows, same keys; cmi_gs added, cmi_sum gone; 53 common columns equal the existing combined_covariates.rds up to
+   8.9e-16, NA patterns identical; the four summary CSVs byte-identical to the existing ones.
+ NOT done: the user's own data/build/ files were NOT replaced (03c/03z run on the user's machine as part of T10). Earlier CMI results
+ (noint/inttest; synthesis "CMI n.s.") are not comparable to the new definition. Methods R1: "CMI over the NRCan growing season
+ (the window of gdd_3), monthly values weighted by the share of each month in the season" instead of "May-October".
+Note for the baseline (T3 testing): 04 reads pee_ori_sond / station_pe from PEP.gpkg, so the stand-in is NOT enough for 04 -- the
+ needed layers must be extracted on the device into a smaller file first.
+Climate collinearity check 2026-10-24 (new combined_covariates from the tested 03c/03z, 48,012 visits):
+ - Brice et al. (2020) used mean growing-season temperature and May-Sep CMI (10-yr means, standardised); they report NO correlation or
+   collinearity check between them. Same variables in our data (an_meanT_3 assumed = NRCan period-3 mean T): r = -0.80 (VIF ~2.3).
+ - Ours: gdd_3 vs GS-matched cmi_gs r = -0.53 (plot level -0.57); VIF gdd_3 1.40, cmi_gs 1.39, soil_pc1 1.01 (May-Oct version: 2.29).
+ - Implication: no bias from collinearity per se; SE inflation ~sqrt(1.4) = 1.2; effects are partial (GDD at fixed CMI). In sparse
+   transitions GDD and CMI can trade off ("CMI n.s." there is weak evidence); 09 uses the pooled joint covariance.
+ - Report r and VIF in the Methods (R1). R5 (derived quantities): covariate-support flags must check the JOINT GDD-CMI distribution
+   (warm plots are drier; "warmer at unchanged CMI" may be outside the data). Untested: whether correlated covariates worsen the MI
+   attenuation (simulation used independent covariates) -> covered by SIM2.
+
+## T3 preparation 2026-10-24: three findings in 03_build_covariates.R (diagnostic only, nothing changed yet)
+Test setup: data/raw/pep/PEP_subset_for_tests.gpkg (+ .gz) = the 5 layers 03/03c/04 read (placette_mes, pee_ori_sond, station_pe,
+ dendro_arbres, placette), row counts identical to PEP.gpkg, md5-checked after transfer; built on the VM's local disk because SQLite
+ cannot write on the FUSE mount (a failed first attempt left a stub + journal, deleted on the user's request). For TESTS only.
+F1 data.table version dependence: 03 step 7 uses nafill(x, "locf", fill = 0L). data.table < 1.15 ignores `fill` for locf (warning) and leaves
+ leading NAs as NA -> every undisturbed visit gets fire/harv/pest = NA instead of 0 (43,436 NA fire rows with 1.14.10). The user's
+ machine has >= 1.15 (existing output has 0s). Cloud tests now use data.table 1.16.4 built from source in a private library.
+F2 The existing build was made with the COMMITTED 03 (git 9298c98, 2026-09-11), not the current file: running 9298c98 (paths only
+ adapted) reproduces data/build/disturbance_covariates.rds exactly (all 14 columns, all 49,428 rows). The current 03 carries ~170
+ changed lines in step 6b (same_window / resolve_conflict: same-type year conflicts within one visit window = same event, keep the later
+ year; different windows = fork a new event), last edited 2026-09-14, NOT documented in these notes and never run for any analysis
+ (noint and inttest used the 9298c98 logic). Running the current 03 changes ~1% of rows: fire 173, harv 462, pest 301 rows (266 plots
+ with harvest changes), TSD 63-476 rows. Copy of 9298c98: _archive/git_versions/03_build_covariates_9298c98.R.
+F3 BUG in steps 7b/8 (both versions): an UNDATED episode spanning several visits gets the lower-bound TSD = 0 at EVERY visit and the
+ upper bound = the gap to the previous visit at every visit -- TSD never accumulates. Cause: 7b imputes each row with its OWN visit year
+ (not the episode's first-seen year), and step 8's sub-group counter cumsum(int > 0) increments at every active row, so each row is its own
+ group. Dated events are unaffected (their year is constant within the episode). In the existing output: among undated rows with an imputed
+ TSD, share with tsh_imputed == 0: 97.9% (6,422 rows), tsf 100% (1,182), sfp 94.3% (1,908). Example plot 7000400301 (harvest first
+ seen 1997, visits 1997/2008/2022): tsh_imputed 0/0/0 (should be 0/11/25), tsh_imputed_prev 12/11/14 (should be 12/23/37).
+ => explains much of the "24-45% of flagged intervals have TSD exactly 0" (2026-10-19) and affects every TSD result of inttest
+ (e.g. "TSD fades only for to-regen").
+F2 detail (2026-10-25): what the undocumented 14 Sep edits in 03 step 6b do (git diff 9298c98..working copy; both versions run on the
+ test subset with data.table 1.16.4): 661 of 11,823 plots change (789 rows with a flag change, 350 rows TSD only). Four mechanisms:
+  (a) same type, two different years within one visit window = the same event (keep the later year) instead of a new event + epoch reset.
+      Ex. 9509702501: CT 1974 (v1-2), CT 1973 (v3-4): old = second clear-cut at v3 (tsh 32/37), new = one event (tsh 31/36).
+  (b) backfill per level (origine / perturb) independently. Old backfill kept ONE state per row and wiped the other level, so a backfilled
+      older dated event erased real codes. Ex. 7009501001: CT seen 1992 erased by a backfilled BR 1947 (old fire=1, harv=0 at v3-4; new
+      harv=2); 7509500602: CE (partial cut) erased by a backfilled ES 1981; 8901804302: EL at v1 erased by CT 1955.
+  (c) consolidation when both levels end with the same type on a row; (d) origine with a later year than the perturb year suppresses perturb.
+  Questionable consequence of (a) across levels: the merged event stays in the column tracked first, so CP 1983 then CT 1984 (same window)
+  = one PARTIAL harvest (7200500902: harv 2 -> 1); 9 plots harv 2 -> 1.
+ Pre-existing in both versions (not part of the 14 Sep edits): a stand-origin code re-recorded at a later visit with a year BEFORE the previous
+  visit is treated by the forward pass as a NEW origine event (resets perturb and the epoch). 4,497 such rows (2,975 plots); 4,330 are
+  harmless continuations (same type already active); 167 rows / 133 plots had another flag active at the previous visit and may lose it
+  (e.g. 8901804302: EL seen 1989 cleared in 1999 by a re-recorded CT 1955). Relevant for the station merge (station repeats origine codes).
+ES at a first visit (2026-10-25): 81 plots have pee ES at their first visit, 79 undated; 75 have pest=1 at visit 1 with NA TSD. They were NOT
+ excluded by 04 only because of F3: from visit 2 on every visit gets its own imputed year, so sfp_imputed = 0 at each later visit
+ (36 of 73 at visit 2; the rest got a year backfilled from a later dated code). Ex.: ES (undated) seen 1971 -> sfp_imputed 0 in 1978, 1992,
+ 2003, 2016. After the F3 fix these become undatable at the first visit -> without the pest W_j trick 04 would exclude them. The same F3
+ masking explains why 04's W_j trick for fire/harvest filled only 10 plots: undated first-visit BR/CT also got TSD 0 at later visits
+ instead of NA. After the fix the W_j trick will apply to many more plots, for all three types.
+Step 6b behaviour, tested 2026-10-25 with a harness that runs the CURRENT reclassify_plot() on synthetic plots (scratch only, 03 unchanged):
+ Q1 clear-cut CT 1970, partial CP 1995 two visits later (different windows): both tracks kept (origine harv 1970 + perturb harv 1995);
+   output harv = 2 (origine always wins the level) but TSD = 1995 (type_year takes the later year) -> level of one event, TSD of another.
+   Real data (current 03): 865 rows / 395 plots carry both harvest tracks, 724 rows with the partial cut later than the heavy one.
+ Q2a CP 1983 seen 1996, CT 1984 seen 2003 (same window): one event, stays PARTIAL (column tracked first), year 1984 (the later year).
+ Q2b/Q2c same level, same window, years differ: the HIGHER year is kept whichever observation came first (CT 1973 then 1974 -> 1974,
+   back-filled to v1-2). So the rule is "max year", not "first observation".
+ Q2d CT 1990 + CP 1990 at the same visit: both tracks kept, harv = 2, year 1990.
+ Q3 EL (undated) at v1 1989, CT 1955 re-recorded at v2-v4: EL dropped from v2 on, because the forward pass treats CT 1955 at v2 as a NEW
+   stand-origin event (new_event clears the perturb slot), although 1955 < the previous visit (1989). Oversight.
+2026-10-26 Undated cross-level codes (a NEW undated code of the other level for a type already tracked; current 6b = continuation of the
+ tracked event at its old level). BA change vs the previous visit (pee codes, current 03; BA test = loss > 25% or drop from >= 5 to < 5 m2/ha,
+ the thresholds of steps 5/6b):
+  harvest, new undated partial while a stand-origin track is active: n 117, median BA +34%, BA test 12%  (~ like repeated codes / undisturbed)
+  harvest, new undated stand-origin while only a partial track is active: n 111, median +12%, BA test 37%  (mixed)
+  pest: same two cases n 21 (test 29%) / n 35 (test 46%)
+  references: new partial dated in the last interval 48% (n 532); new stand-origin dated in the last interval 88% (n 1105);
+   stand-origin code repeated 10% (n 2781); undisturbed 13% (n 15104) = background false-positive rate of the BA test.
+ => partial-after-heavy is mostly the old event recorded again; heavy-after-partial is roughly one third real new clear-cuts.
+
+## Disturbance event rewrite (03 steps 6b-8 -> event table), started 2026-10-26 -- decisions (user) and progress
+Rules (user-agreed 2026-10-25/26):
+ A  same type, same window (no visit strictly between the two years): one event; the record with the latest year sets year AND
+    level (type/intensity); tie in year -> the more severe level. Different types in the same window: both kept (compound).
+ 1  same type, one record dated, one undated: the dated one sets year and level, if chronologically possible (its year <= the visit
+    where the undated one was first seen); otherwise it is a new event.
+ B  undated record of a type already tracked (repeated or not): BA event at this visit -> new occurrence (lower-bound dating, its own
+    level); no BA event -> the old event (old year, old level). Applies to repeated codes too (user: "we work with what we get");
+    counted separately in the log. Table of BA changes for these cases: see 2026-10-26 entries above (449 of 2,866 undated
+    same-type codes would become new events; flagged ones lose a median 39-100% BA, but undisturbed flagged visits also lose a median
+    48% -> the BA flag cannot separate new events from unrecorded mortality).
+ C  (i) for now, pending the supervisor: when two events of the same type are active, the more recent one sets the level and TSD
+    (heavy 1970 + light 1995 -> light, TSD 1995). Supervisor asked (user message) how to handle compound / successive disturbances and
+    TSD; may change. Discussed alternative for later: split "stand origin (type + age)" from "partial disturbances since origin".
+ D  a stand-origin code dated before the previous visit is a real event placed at its own date: back-filled only to visits where it
+    is chronologically possible, and it does not end anything more recent than itself.
+ CE two records (partial harvest + partial pest).
+ Resets: a stand-origin event ends the events of all types that became visible at an EARLIER visit. Events first visible at the
+    same visit (same inter-visit interval, incl. "before the first visit") are compound and do not end each other. (Needed so that
+    A's "different types: both kept" holds, e.g. fire 1983 + salvage CT 1984.)
+ BA flag: one definition everywhere (ba_event): loss >= BA_LOSS_THRESH since the previous visit, or a drop from >= BA_REGEN to
+    < BA_REGEN; first visit: BA < BA_REGEN. BA_REGEN (5) and BA_LOSS_THRESH (0.25) now in R/config.R, read by 02 and 03 (S15 = one
+    value). Step 5's crash test is the same definition; 6b's old same-year test (BA < 5 without a drop) differs in 3 of 48 rows.
+ 04 stand-age rule (W_j trick) stays in 04 (needs W_j) as the LAST resort, driven by an explicit marker from 03
+    (*_dating == "first_visit": stand-origin event undated at the first visit), extended to pest; guard if any is left.
+ Epoch logic of step 7: redundant (6b already carries/clears; counter rose at every visit with a stand-origin track) -> dropped.
+Steps 1-3 DONE 2026-10-26:
+ - R/config.R: BA_REGEN, BA_LOSS_THRESH. R/02 (regen rule) and R/03 (steps 5/6b) read them. Originals: R/archive/_archive_pre_events/.
+   Check: 03 with the config thresholds gives output identical to before (cloud run, test subset). 02 parses but was NOT run
+   (needs layers not in the test subset); the change is 5 -> BA_REGEN (= 5).
+ - R/03a_disturbance_events.R: functions E0-E5 (ba_event_flag, make_records, build_events, start_visit, event_activity,
+   visit_values, wrapper disturbance_plot). Not yet used by 03.
+ - R/tests/03t_disturbance_events_test.R: 27 invented-plot tests (A1-A5, U1-U2, B1-B5, C1, D1-D3, CE1, Y1-Y2, F1-F4, R1-R3, E0),
+   exact expected flags/TSD per visit. All pass (cloud R 4.3.3, data.table 1.16.4), run from the project copies.
+ Next: step 4 (03 steps 6b-8 replaced by calls to 03a) and step 5 (full run on pee codes, every changed row attributed to a rule).
+2026-10-26 Real-plot check of the new event logic: R/tests/03u_compare_events_real_plots.R (user can run it; reads PEP.gpkg, rebuilds the
+ 03 step 1-5a inputs for chosen plots, checks year/BA equal the build, prints old build vs new logic per visit). Cloud run (test subset):
+  7009501001 fixed (clear-cut seen 1992 now harv 2, fire ended); 9509702501 one event (TSD -1 y); 7000400301 F3 fixed (0/11/25);
+  7509500602 CE harvest restored (pest unchanged); 7200500902 and 8901804302 identical to the build (the 14 Sep version had broken them);
+  8901804502 EL at the first visit no longer flagged (T3d), new EL with BA loss at v4 = new event.
+  ALL 396 "simple" plots (every code dated within its own interval, one code per visit) IDENTICAL to the build.
+ OPEN (user, 2026-10-26): "any stand-origin disturbance resets everything" -> with known dates the later stand-origin event would end the
+  older one, also in the same window (fire 1983 + salvage CT 1984 -> fire dropped), which contradicts the earlier "different types in the
+  same window: keep both". Asked the user to choose; tests A5/R3 encode the current same-start-visit rule.
+Steps 4-5 DONE 2026-10-26 (pee codes only; station merge not yet):
+ - R/03_build_covariates.R: steps 6-8 replaced by the event logic (sources R/03a_disturbance_events.R); step 5 truncation uses
+   ba_event (same test); output adds ba_event, *_imputed_mid, *_dating; saves data/build/disturbance_events.rds (events, records with
+   the rule/action per record, visit codes + event ids). Old 03: R/archive/_archive_pre_events/03_build_covariates.R.
+ - Backup of the previous build (= what noint/inttest used): data/build/disturbance_covariates_build_9298c98.rds (md5 = original).
+ - Cloud run on the test subset (data.table 1.16.4): 1.2 min; 17,875 records -> 10,193 events in 7,813 plots; TSD checks 0 violations
+   (negative, min > max, mid outside [min, max], real != bounds); flags and dating markers agree. Project 03 == tested 03 (diff).
+   Record actions: continuation 2,343; new_ba_event 418 (B); new_after_reset 4; date_adopted 1,215; merges 4,107.
+   Events: 1,162 partial events undated at the first visit, never flagged (T3d, 1,151 plots).
+   NA TSD lower bound among flagged visits: fire 22.5%, harv 16.2%, pest 3.5% = stand-origin events undated at the first visit (->04).
+ - R/tests/03v_attribute_changes.R (user can run after 03): every change vs the old build attributed to a rule. Result:
+   49,428 visits / 11,823 plots; 10,902 changed visit x type cells (10,563 visits, 3,914 plots):
+     F3 TSD now accumulates 2,427 cells (1,341 plots) | T3d first-visit partial not flagged 3,611 (1,080) |
+     first-visit stand-origin TSD left to 04 2,693 (898) | C level 478 (276) + TSD 33 (26) | A/1 level 514 (197) | A merge 189 (163) |
+     restored codes erased by the old back-fill 380 (135) | D back-fill 122 (52) | B 114 (39) | compound before first visit 131 (34) |
+     reset 80 (28) | CE 71 (22) | dated other window 9 (4) | OTHER: flag lost 21 (21), flag gained 23 (17), level 5 (3), TSD 1 (1).
+   Inspected "other" examples (7): all explained -- rule 1 downgrading a stand-origin record to the dated partial record
+   (7601903401: ES + EL 1986 -> partial 1986, so no harvest reset), D (8809405102), A tie/latest year (7109612101, 7208801702,
+   7608901001), the same-year rule now using ba_event instead of BA < 5 (7501401901), old bug with a future-dated EPC (7609508102).
+   Not every "other" row inspected.
+ - Red flags: (1) T3d removes 3,017 harvest + 587 pest flagged visits (were flagged with TSD 0 because of F3) -> term counts per
+   transition will change (T9); S18a/b. (2) Rules A/1 downgrade 278 events (275 plots; harv 232, pest 45, fire 1) from stand-origin to
+   partial because a later-dated or dated partial record of the same type belongs to them; such an event then no longer resets other
+   types. 364 events are upgraded. (3) 898 plots now depend on the 04 stand-age rule (extend to pest, marker-driven; step 7).
+ OPEN (user): reset rule for two dated stand-origin events of different types in one window / before the first visit (34 plots
+  "compound before the first visit" in this run).
+ NOT yet: 03z keep-list must pass *_imputed_mid and *_dating to combined_covariates (with the 04 step).
+2026-10-26 (later) decisions + implementation:
+ - Rule 1 / A downgrade (e.g. ES undated + EL 1986 dated -> partial pest 1986, no longer a stand-origin reset): KEPT as is (user): the
+   dated record sets year AND level.
+ - TSD of undated events: same vs new event is decided by the BA rule (undated codes) and the window rule (dated codes); limitation: a
+   real second partial event with < 25% BA loss is read as the same event (TSD too long); unrecorded mortality after a code = new event.
+ - T3d: confirmed as decided (pre-observation partial disturbance not flagged = the user's earlier caveat); S18a/S18b cover it.
+ - NEW stand-origin selection (user): stand-origin events of DIFFERENT types with the same start visit (same interval, incl. before the
+   first visit) are treated as salvage logging / one stand origin: only one is kept, the others dropped (never active). All dated ->
+   the latest year; same year -> harvest > fire > pest; any undated -> harvest if present, else the dated one, else fire.
+   A partial + a stand-origin event in one window: both kept (unchanged). Data: pee_ori_sond holds ONE origine code (+ an_origine) per
+   visit, so such pairs come from DIFFERENT visits recording different origine codes with years in one window (44 pairs, 43 plots; 0 at
+   the same visit); "same year" = crews wrote the same an_origine at different visits (e.g. 8809416701: CT 1995 seen 1998, BR 1995 seen
+   2014). Within an interval the known orders were all harvest after fire/pest or same year; before the first visit gaps up to 87 y.
+ - Code: R/03a_disturbance_events.R choose_stand_origin() + E4 change; tests A5, R3 updated, A6, S1-S4 added: 32 tests pass.
+   Full 03 rerun (cloud, pee codes): 0 TSD violations; 10,904 changed cells (10,488 visits, 3,899 plots) vs the old build;
+   new tag "selection" 65 harvest cells / 18 plots (harvest kept where the old build kept fire/pest); reset/dropped 159 cells / 51 plots.
+   R/tests/03v_attribute_changes.R labels updated.
+
+## 2026-10-26 (afternoon) -- status after the rewrite problems, and decisions (user)
+STATUS: the rewritten 03 (event logic) broke the old back-fill principle (a later dated record dates earlier undated records of
+ the same type; e.g. 7009400402: undated CT at visits 1-2 + "CT 1969" later should all be 1969). Principle checks vs the old build:
+ P1 (back-fill) correct old 1,599 / new 1,531 of 1,718 records; P2 (dated record shows its own year) old 9,081 / new 8,831 of 9,951.
+ I (Claude) also implemented several rules WITHOUT explicit user approval (listed and answered below). Nothing has been run on the
+ user's machine; data/build is untouched (+ backup disturbance_covariates_build_9298c98.rds). The current 03 in R/ is NOT to be run
+ until the rules below are implemented and signed off.
+User decisions (2026-10-26):
+ A1 same type recorded at the SAME visit: higher intensity; same intensity -> higher year; one without year -> higher intensity with
+    the available year.
+ A2 a later visit re-records an event already tracked (its year in that event's interval): the ORIGINAL record wins (year and
+    intensity). If the original has no year: the year comes from the later record (back-fill), the intensity stays the original.
+ Back-fill: a later dated record dates earlier undated records of the same type when chronologically possible (as the old code).
+ b/e resets: a stand-origin event removes events known to be older (by date); younger events stay; order unknown -> both stay.
+    A BA drop does NOT make an UNDATED record a new event when a stand-origin code of another type is recorded at the same visit
+    (the drop belongs to that event); dated records are placed by their year.
+ c  undated events use their imputed date; same type undated without BA drop = same event; with BA drop = new event (imputed year);
+    may later be dated by back-fill. 7009700201: last visit TSD from 1999 (the re-recorded 1991 refers to the ended 1991 event).
+ d, f, h: kept (d: two records of one type at one visit = one event; f: equal dates -> more severe shown; h: year after the visit).
+ g / T3d REPLACED: undated PARTIAL codes at the first visit are flagged and get an imputed age at the first visit:
+    harvest and pest: the MEDIAN age of DATED partial codes of that type recorded at the first visit (first-visit year - event year):
+    harvest 4.5 y (n 156), pest 32 y (n 21; a grouped earlier budworm episode is plausible). Fire (partial, n 1 dated, 6 undated):
+    the stand age W_j. NEW SENSITIVITY S19: the 10% and 90% quantiles instead of the median (harvest 3 / 22.5 y, pest 25 / 37 y).
+    (Values from the test subset run; recompute in the pipeline, not hard-coded.) No extra model parameter (missing-timing indicator
+    rejected).
+ Stand-origin event undated at the first visit: TSD = W_j (stand age) + elapsed years, computed in 03 (no NA reaching INLA).
+ W_j: computation moved to a step 02b (unchanged logic, incl. the station_pe fill order) that writes the stand-age table read by 03
+    and 04; S13 alternative values decided at the sensitivity stage.
+ TSD_SOURCE (lower / mid / upper) moves to R/config.R; main = mid.
+ OPEN: the 34% finding (dated partial codes first recorded at a later visit lie in the interval since the previous visit only 66% of
+    the time; median age 9 y at first record vs ~half an 11-y interval assumed for undated codes).
+ 34% finding DECIDED (user): keep the interval midpoint for undated codes first recorded at a later visit; lower/upper bounds as the
+    sensitivity (S11); state the limitation in the Methods (34% of dated new partial codes are older than the previous visit, so the
+    bounds do not cover late records and the midpoint is likely too recent).
+ More decisions (user, 2026-10-26 14:0x):
+  - Processing order: FIRST assign years from the data (back-fill), THEN build events, observation order and resets.
+  - Back-fill: an undated record takes the year of the FIRST LATER dated record of its type that is chronologically possible (year <=
+    its visit year); incompatible dated records in between are skipped. Ex.: CT - (1971), CT 1980 (1995), CT 1965 (2007) -> the 1971
+    CT is 1965; CT 1980 is a new event that resets it; the 2007 record re-records 1965 (A2, no change), so 2007 shows 1980.
+  - First-visit imputed event vs a stand-origin event dated before the first visit: order unknown -> both stay.
+  - First-visit imputed ages stay fixed in the S11 (lower/upper) runs; they vary only in S19 (quantiles) and S13 (W_j).
+  - Step 7 (two active events of one type, order unknown): the MORE SEVERE one is shown.

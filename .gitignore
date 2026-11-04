@@ -13,3 +13,13 @@ data-output/_r_test_tmp/
 # OS / editor junk
 .DS_Store
 **/.DS_Store
+
+# folder layout 2026-10-24: generated prep data and all INLA output (large, reproducible)
+data/build/
+data/tables/
+data/diagnostics/
+data-output/*/fits/
+data-output/*/results/
+data-output/*/sensitivity/
+data-output/diagnostics/
+_archive/

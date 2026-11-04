@@ -9,11 +9,11 @@
 # longer reflected its place in the pipeline, hence the move to 06.
 #
 # Inputs (all keyed on id_pe + no_mes = plot + visit number):
-#   - data/processed/state_classification.rds        (from 02)
-#   - data/covariates/pep/disturbance_covariates.rds  (from 03)
-#   - data/covariates/pep/soil_covariates.rds         (from 03b)
-#   - data/covariates/pep/climate_covariates.rds      (from 03c)
-# NOT used: data/covariates/pep/climate_by_year_raw.rds -- that's an
+#   - data/build/state_classification.rds        (from 02)
+#   - data/build/disturbance_covariates.rds      (from 03)
+#   - data/build/soil_covariates.rds             (from 03b)
+#   - data/build/climate_covariates.rds          (from 03c)
+# NOT used: data/build/climate_by_year_raw.rds -- that's an
 # intermediate per-calendar-year checkpoint cache from 03c, a different grain
 # entirely (id_pe x year, not id_pe x visit), out of scope here.
 #
@@ -47,20 +47,29 @@
 #   4. Assemble final combined table, save
 #   5. Column-by-column diagnostics summary (for the paper's methods
 #      section), save as CSV alongside the combined data
+#   6. Transition diagnostics: counts of transitions between states,
+#      disturbance occurrence per transition, and inter-visit interval
+#      distributions (overall and per transition) -- saved as CSVs for the
+#      methods section
+#   7. Transition intensity matrix figure: from_state x to_state heatmap,
+#      cells with n < 15 masked black -- saved as PNG for the methods section
 # ==============================================================================
 
 library(data.table)
 library(here)
+library(ggplot2)
 
 ## ---- 0. config ------------------------------------------------------------
 
-STATE_PATH <- here("data", "processed", "state_classification.rds")
-DIST_PATH  <- here("data", "covariates", "pep", "disturbance_covariates.rds")
-SOIL_PATH  <- here("data", "covariates", "pep", "soil_covariates.rds")
-CLIM_PATH  <- here("data", "covariates", "pep", "climate_covariates.rds")
+source(here::here("R", "config.R"))   # project paths (data/build etc.)
+dir.create(BUILD_SUM_DIR, recursive = TRUE, showWarnings = FALSE)
+STATE_PATH <- file.path(BUILD_DIR, "state_classification.rds")
+DIST_PATH  <- file.path(BUILD_DIR, "disturbance_covariates.rds")
+SOIL_PATH  <- file.path(BUILD_DIR, "soil_covariates.rds")
+CLIM_PATH  <- file.path(BUILD_DIR, "climate_covariates.rds")
 
-OUT_PATH      <- here("data", "processed", "combined_covariates.rds")
-SUMMARY_PATH  <- here("data-output", "data", "combined_covariates_summary.csv")
+OUT_PATH      <- file.path(BUILD_DIR, "combined_covariates.rds")
+SUMMARY_PATH  <- file.path(BUILD_SUM_DIR, "combined_covariates_summary.csv")
 
 ## ==============================================================================
 ## STEP 1. LOAD
@@ -129,7 +138,12 @@ clim_f <- clim[, .(id_pe, no_mes, win_start, win_end, start_gs, end_gs, length_g
                     pcp_1, pcp_2, pcp_3, pcp_4, gdd_1, gdd_2, gdd_3, gdd_4,
                     an_meanT, an_minT, an_maxT, an_meanT_3, an_range_T_3,
                     cmi_1, cmi_2, cmi_3, cmi_4, cmi_5, cmi_6, cmi_7, cmi_8,
-                    cmi_9, cmi_10, cmi_11, cmi_12, cmi_sum, n_years_used)]
+                    cmi_9, cmi_10, cmi_11, cmi_12, n_years_used)]
+## Growing-season CMI (decided 2026-10-22): sum of the monthly CMI May-October = the months of the NRCan growing season (period 3, the
+## same period as gdd_3: start ~4 May, end ~23 Oct in these plots). Exact: the 10-yr averaging is linear, so the sum of the averaged months
+## equals the 10-yr average of the yearly May-Oct sums. r = 0.997 with the May-Sept CMI of Brice et al. (2020). Annual CMI (cmi_sum) is
+## NOT carried any more: 73% of its between-plot variance came from Oct-Apr (winter precipitation), not growing-season water balance.
+clim_f[, cmi_gs := cmi_5 + cmi_6 + cmi_7 + cmi_8 + cmi_9 + cmi_10]
 
 ## ==============================================================================
 ## STEP 3. ROW-LEVEL INNER JOIN
@@ -217,6 +231,157 @@ dir.create(dirname(SUMMARY_PATH), showWarnings = FALSE, recursive = TRUE)
 fwrite(summary_dt, SUMMARY_PATH)
 cat(sprintf("\nSaved column summary: %s\n", SUMMARY_PATH))
 
+## ==============================================================================
+## STEP 6. TRANSITION DIAGNOSTICS (for methods section)
+##
+## One row per observed transition: a plot's state at visit i vs. its state
+## at the next RETAINED visit. "Next retained" is not necessarily "no_mes +
+## 1" -- the row-level join (STEP 3) can leave gaps in a plot's visit
+## sequence, so a transition can silently span more than one nominal
+## measurement interval. no_mes_gap flags this below.
+## ==============================================================================
+
+cat("\nBuilding transition diagnostics...\n")
+
+setorder(combined, id_pe, no_mes)
+combined[, `:=`(
+  .to_state  = shift(state, type = "lead"),
+  .to_no_mes = shift(no_mes, type = "lead"),
+  .to_year   = shift(year, type = "lead"),
+  .to_fire   = shift(fire, type = "lead"),
+  .to_harv   = shift(harv, type = "lead"),
+  .to_pest   = shift(pest, type = "lead")
+), by = id_pe]
+
+trans <- combined[!is.na(.to_state), .(
+  id_pe, no_mes, from_state = state, to_state = .to_state,
+  no_mes_gap = .to_no_mes - no_mes,
+  dt_years   = .to_year - year,
+  fire = .to_fire, harv = .to_harv, pest = .to_pest
+)]
+
+combined[, c(".to_state", ".to_no_mes", ".to_year", ".to_fire", ".to_harv", ".to_pest") := NULL]
+
+n_trans <- nrow(trans)
+n_gap   <- trans[no_mes_gap > 1, .N]
+cat(sprintf("  %d transitions, from %d plots\n", n_trans, uniqueN(trans$id_pe)))
+cat(sprintf("  %d / %d transitions (%.1f%%) skip at least one no_mes (row-level join gap)\n",
+            n_gap, n_trans, 100 * n_gap / n_trans))
+
+## -- 6a. transition counts (from_state -> to_state) -------------------------
+transition_counts <- trans[, .N, by = .(from_state, to_state)]
+transition_counts[, pct := round(100 * N / n_trans, 2)]
+setorder(transition_counts, -N)
+
+cat("\n--- TRANSITION COUNTS (from_state -> to_state) ---\n")
+print(transition_counts)
+
+## -- 6b. disturbance occurrence per transition -------------------------------
+cat(sprintf("\n  overall disturbance occurrence: fire %.1f%%, harv %.1f%%, pest %.1f%%\n",
+            100 * mean(trans$fire > 0, na.rm = TRUE),
+            100 * mean(trans$harv > 0, na.rm = TRUE),
+            100 * mean(trans$pest > 0, na.rm = TRUE)))
+
+disturbance_by_transition <- trans[, .(
+  n        = .N,
+  n_fire   = sum(fire > 0, na.rm = TRUE),
+  pct_fire = round(100 * mean(fire > 0, na.rm = TRUE), 2),
+  n_harv   = sum(harv > 0, na.rm = TRUE),
+  pct_harv = round(100 * mean(harv > 0, na.rm = TRUE), 2),
+  n_pest   = sum(pest > 0, na.rm = TRUE),
+  pct_pest = round(100 * mean(pest > 0, na.rm = TRUE), 2)
+), by = .(from_state, to_state)]
+setorder(disturbance_by_transition, -n)
+
+cat("\n--- DISTURBANCE OCCURRENCE BY TRANSITION ---\n")
+cat("(fire/harv/pest read from the DESTINATION visit -- i.e. what the\n")
+cat(" disturbance covariates record as having occurred since the previous visit)\n")
+print(disturbance_by_transition)
+
+## -- 6c. inter-visit interval (years): overall, then by transition ----------
+interval_stats <- function(x) {
+  x <- x[!is.na(x)]
+  data.table(
+    n = length(x), mean = round(mean(x), 2), sd = round(sd(x), 2),
+    min = min(x), p10 = round(quantile(x, .10), 1), p25 = round(quantile(x, .25), 1),
+    median = round(median(x), 1), p75 = round(quantile(x, .75), 1),
+    p90 = round(quantile(x, .90), 1), max = max(x)
+  )
+}
+
+interval_overall <- interval_stats(trans$dt_years)
+cat("\n--- INTER-VISIT INTERVAL (years), ALL TRANSITIONS ---\n")
+print(interval_overall)
+
+interval_by_transition <- trans[, interval_stats(dt_years), by = .(from_state, to_state)]
+setorder(interval_by_transition, from_state, to_state)
+cat("\n--- INTER-VISIT INTERVAL (years), BY TRANSITION ---\n")
+print(interval_by_transition)
+
+## -- save for the methods section -------------------------------------------
+TRANSITION_COUNTS_PATH <- file.path(BUILD_SUM_DIR, "transition_counts.csv")
+DISTURBANCE_TRANS_PATH <- file.path(BUILD_SUM_DIR, "transition_disturbance_summary.csv")
+INTERVAL_OVERALL_PATH  <- file.path(BUILD_SUM_DIR, "interval_overall_summary.csv")
+INTERVAL_BY_TRANS_PATH <- file.path(BUILD_SUM_DIR, "interval_by_transition_summary.csv")
+
+fwrite(transition_counts, TRANSITION_COUNTS_PATH)
+fwrite(disturbance_by_transition, DISTURBANCE_TRANS_PATH)
+fwrite(interval_overall, INTERVAL_OVERALL_PATH)
+fwrite(interval_by_transition, INTERVAL_BY_TRANS_PATH)
+cat(sprintf("\nSaved: %s\n", TRANSITION_COUNTS_PATH))
+cat(sprintf("Saved: %s\n", DISTURBANCE_TRANS_PATH))
+cat(sprintf("Saved: %s\n", INTERVAL_OVERALL_PATH))
+cat(sprintf("Saved: %s\n", INTERVAL_BY_TRANS_PATH))
+
+## ==============================================================================
+## STEP 7. TRANSITION INTENSITY MATRIX (figure for methods section)
+##
+## Heatmap of transition_counts: from_state (rows/x) x to_state (cols/y),
+## filled by log10(n) on a single-hue sequential ramp. Cells with n < 15 --
+## including (from, to) pairs that never co-occur, n = 0 -- are masked solid
+## black: too few observed transitions to trust a rate or coefficient
+## estimated from that cell in the multistate model.
+## ==============================================================================
+
+cat("\nBuilding transition intensity matrix...\n")
+
+state_levels <- sort(unique(c(trans$from_state, trans$to_state)))
+
+mat_dt <- CJ(from_state = state_levels, to_state = state_levels)
+mat_dt <- merge(mat_dt, transition_counts[, .(from_state, to_state, N)],
+                by = c("from_state", "to_state"), all.x = TRUE)
+mat_dt[is.na(N), N := 0L]
+mat_dt[, masked := N < 15]
+mat_dt[, label_color := fifelse(masked | N >= 50, "white", "#0b0b0b")]
+mat_dt[, from_state := factor(from_state, levels = state_levels)]
+mat_dt[, to_state := factor(to_state, levels = rev(state_levels))]
+
+seq_ramp <- c("#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b")
+
+p_matrix <- ggplot(mat_dt, aes(x = from_state, y = to_state)) +
+  geom_tile(data = mat_dt[masked == FALSE], aes(fill = log10(N)),
+            color = "white", linewidth = 0.5) +
+  geom_tile(data = mat_dt[masked == TRUE], fill = "#0b0b0b",
+            color = "white", linewidth = 0.5) +
+  geom_text(aes(label = N, color = label_color), size = 2.6) +
+  scale_color_identity() +
+  scale_fill_gradientn(colors = seq_ramp, name = "n transitions\n(log10 scale)",
+                        breaks = log10(c(1, 10, 100, 1000)),
+                        labels = c(1, 10, 100, 1000)) +
+  labs(title = "Transition intensity matrix",
+       subtitle = sprintf("n = %d transitions total; %d / %d cells masked (n < 15)",
+                           n_trans, sum(mat_dt$masked), nrow(mat_dt)),
+       x = "From state", y = "To state") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid = element_blank(),
+        plot.title = element_text(face = "bold"))
+
+FIGURE_PATH <- file.path(BUILD_SUM_DIR, "transition_intensity_matrix.png")
+dir.create(dirname(FIGURE_PATH), showWarnings = FALSE, recursive = TRUE)
+ggsave(FIGURE_PATH, p_matrix, width = 9, height = 7.5, dpi = 200)
+cat(sprintf("Saved: %s\n", FIGURE_PATH))
+
 ## ---- notes for methods write-up -------------------------------------------
 # - tsf/tsh/sfp (and their imputed variants) are NA by design when that
 #   disturbance is not currently active -- high missingness there is not a
@@ -234,10 +399,15 @@ cat(sprintf("\nSaved column summary: %s\n", SUMMARY_PATH))
 #   have a gap in their visit sequence (e.g. visits 1, 2, 4 present but 3
 #   missing) -- if the multistate model treats consecutive retained visits
 #   as adjacent transitions, a gap like this silently spans more real time
-#   than a normal interval. Check data/processed/combined_covariates.rds
+#   than a normal interval. Check data/build/combined_covariates.rds
 #   per-plot no_mes sequences for gaps before fitting if this matters for
 #   the model structure.
 # - Plantation plots are the deliberate exception: they are fully absent
 #   from this output (all visits, "before" included), because
 #   02_classify_states.R drops them entirely upstream. See that script's
 #   section 3 for the rationale and which plots/rows that affects.
+# - STEP 6's no_mes_gap quantifies the row-level join gap directly: a
+#   transition with no_mes_gap > 1 skips at least one nominal visit, so its
+#   dt_years spans more real time than a normal interval. Check the console
+#   output's gap rate before treating all transitions as equal-opportunity
+#   in the multistate model.

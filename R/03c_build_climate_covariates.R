@@ -27,6 +27,11 @@
 #       precip minus potential evapotranspiration (simplified
 #       Penman-Monteith); positive = wetter than average, negative = drier.
 #
+# NOTE 2026-10-24: the model uses GROWING-SEASON-MATCHED CMI (cmi_gs, built here in step 4b): monthly CMI weighted by the share of each
+#   month inside the plot-year's NRCan growing season [start_gs, end_gs] (= the window of gdd_3), then averaged like every column.
+#   Replaces the fixed May-Oct sum of 2026-10-22 (plot-level r = 0.95 with it; correlation with gdd_3 -0.61 instead of -0.80).
+#   cmi_sum (annual) is still written here (raw product) but dropped in 03z. Brice et al. (2020) used May-Sept CMI.
+#
 # Methodology (matches Brice et al. 2020, Global Change Biology, methods
 # text -- see numericalecology.com/Reprints/Brice_et_al_Global_Change_
 # Biology_2020.pdf): each climate variable is averaged over the 10-year
@@ -69,9 +74,11 @@ MIN_YEAR_AVAILABLE <- 1960L   # confirmed via HEAD-check (1958-1962 all HTTP 200
 MAX_YEAR_AVAILABLE <- 2022L   # confirmed via HEAD-check (2023-2025 all HTTP 404)
 TRAIL_WINDOW <- 10L           # years prior to measurement, per Brice et al. methods
 
-RAW_DIR   <- here("data", "climate_raw")           # scratch, deleted per-year after extraction
-CKPT_PATH <- here("data", "covariates", "pep", "climate_by_year_raw.rds")
-OUT_PATH  <- here("data", "covariates", "pep", "climate_covariates.rds")
+source(here::here("R", "config.R"))   # project paths (data/build etc.)
+RAW_DIR   <- here("data", "raw", "climate_raw")    # scratch, deleted per-year after extraction
+dir.create(BUILD_DIR, showWarnings = FALSE, recursive = TRUE)
+CKPT_PATH <- file.path(BUILD_DIR, "climate_by_year_raw.rds")
+OUT_PATH  <- file.path(BUILD_DIR, "climate_covariates.rds")
 
 dir.create(RAW_DIR, recursive = TRUE, showWarnings = FALSE)
 dir.create(dirname(OUT_PATH), recursive = TRUE, showWarnings = FALSE)
@@ -86,8 +93,8 @@ cmi_month_names <- paste0("cmi_", 1:12)
 
 ## ---- 1. plot-visits that matter -----------------------------------------
 
-sc <- readRDS(here("data", "processed", "state_classification.rds"))
-dc <- readRDS(here("data", "covariates", "pep", "disturbance_covariates.rds"))
+sc <- readRDS(file.path(BUILD_DIR, "state_classification.rds"))
+dc <- readRDS(file.path(BUILD_DIR, "disturbance_covariates.rds"))
 
 stopifnot("year" %in% colnames(dc))
 
@@ -257,6 +264,33 @@ for (yr in years_needed) {
 
 cat(sprintf("\nAll years processed. Checkpoint has %d years, %d rows.\n",
             uniqueN(long_dt$year), nrow(long_dt)))
+
+## ---- 4b. growing-season-matched CMI per plot-year (decided 2026-10-24) --
+## cmi_gs = sum_m cmi_m x (days of month m inside [start_gs, end_gs]) / (days in month m).
+## start_gs / end_gs = NRCan growing season (period 3 = the window of gdd_3), inclusive day-of-year, per plot-year.
+## Month boundaries from each year's own calendar (in leap years every day-of-year after February shifts by one).
+## Assumption: CMI is spread evenly within a partial month (only the season's first and last months are partial).
+## Months with weight 0 do not count, so an NA in a month outside the season does not make cmi_gs NA.
+## Computed BEFORE the 10-yr averaging: step 5 averages cmi_gs like every other column. The checkpoint file is not modified.
+## Tested 2026-10-24 on all 717,835 plot-years (see PIPELINE_NOTES): weighted days == length_gs in every row; hand example reproduced.
+cmi_gs_matched <- function(year, start_gs, end_gs, cmi_mat) {
+  stopifnot(ncol(cmi_mat) == 12L, length(year) == nrow(cmi_mat), length(start_gs) == length(year), length(end_gs) == length(year))
+  leap  <- (year %% 4L == 0L & year %% 100L != 0L) | year %% 400L == 0L
+  md    <- rbind(c(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31),
+                 c(31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31))
+  mdays  <- md[leap + 1L, , drop = FALSE]                                # n x 12
+  mend   <- t(apply(md, 1, cumsum))[leap + 1L, , drop = FALSE]
+  mstart <- mend - mdays + 1
+  inside <- pmax(pmin(mend, end_gs) - pmax(mstart, start_gs) + 1, 0)    # matrix first: keeps dim; vectors recycle per row
+  w <- inside / mdays                                                    # NA where start/end is NA
+  cm <- as.matrix(cmi_mat); cm[!is.na(w) & w == 0] <- 0
+  list(cmi_gs = rowSums(cm * w), w = w)
+}
+gsm <- cmi_gs_matched(long_dt$year, long_dt$start_gs, long_dt$end_gs, long_dt[, paste0("cmi_", 1:12), with = FALSE])
+long_dt[, cmi_gs := gsm$cmi_gs]
+cat(sprintf("\nGS-matched CMI: %d plot-years, %d NA (missing season dates or in-season CMI); %.1f%% of plot-years have season days outside May-Oct.\n",
+            nrow(long_dt), sum(is.na(long_dt$cmi_gs)), 100 * mean(rowSums(gsm$w[, c(1:4, 11:12), drop = FALSE]) > 0, na.rm = TRUE)))
+rm(gsm)
 
 ## ---- 5. per-visit truncated trailing average -----------------------------
 
