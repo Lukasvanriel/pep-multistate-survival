@@ -161,6 +161,10 @@ stopifnot("A1.5: NA in a first-visit column of plot_info" = !anyNA(plot_info[, .
           "plot_info: negative first-visit TSD" = all(plot_info[, .(fv_tsd_fire_y, fv_tsd_pest_y, fv_tsd_harv_y)] >= 0),
           "plot_info: first-visit TSD must be 0 where the flag is 0" =
             all(plot_info[fv_fire == 0L, fv_tsd_fire_y] == 0, plot_info[fv_pest == 0L, fv_tsd_pest_y] == 0, plot_info[fv_harv == 0L, fv_tsd_harv_y] == 0))
+# the fv_ flags must be the START-visit flags of interval 1 (same visit, taken from different columns of dt2): harvest, and fire / pest if iv has them
+i1 <- iv[interval == 1L]; pq <- plot_info[match(i1$id_pe, id_pe)]
+for (tp in c("harv", "fire", "pest")) if (paste0(tp, "_start") %in% names(iv))
+  if (!all(pq[[paste0("fv_", tp)]] == i1[[paste0(tp, "_start")]])) stop(sprintf("plot_info: fv_%s differs from the %s_start flag of interval 1", tp, tp))
 cat(sprintf("plot_info: %d plots; flagged at the first visit: fire %d, pest %d, harvest light %d / heavy %d; any flag %d, none %d (plan, main build: 6,330 with none)\n",
             nrow(plot_info), sum(plot_info$fv_fire == 1L), sum(plot_info$fv_pest == 1L), sum(plot_info$fv_harv == 1L), sum(plot_info$fv_harv == 2L),
             plot_info[, sum(fv_fire == 1L | fv_pest == 1L | fv_harv > 0L)], plot_info[, sum(fv_fire == 0L & fv_pest == 0L & fv_harv == 0L)]))

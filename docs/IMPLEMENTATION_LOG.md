@@ -218,7 +218,7 @@ Template:
   - New tests: `R/tests/wp4_C1_check.R` (synthetic tables through the real `prepare_fit_inputs`; `real` argument for the real tables), `R/tests/wp4_C5_toy.R`, `R/tests/wp4_C5_shift.R` (WP5).
 - Checks run (cloud, R 4.3.3, data.table; no INLA, no real data):
   - `Rscript R/tests/wp4_C1_check.R` -> ALL CHECKS PASSED: (1) X1 = scaled first-visit values, X0 without disturbance, onset = W_j - TSD, 40 plots; (2) pieces: plot with onsets 25.4 and 27.5 gets breakpoints 25.4, 26.4, ..., 39.4, 40 plus 27.5, last piece [39.4, 40] with midpoint 39.7; onset -5 -> grid from 0 and TSD 5.5 at the first midpoint; lambda per piece equals an independent build;
-    (3) identity: 26 plots, max difference 4.3e-14; (4) KS: see checklist (p = 0.013 is the lowest of four; 1e6-draw rerun p = 0.17 / 0.63 / 0.06); (5) weights equal an independent numerical integral (max 1.4e-16); (6) `p1_entries` reproducible with the seed; no-ok-transition case; (7) `c5_shift` runs.
+    (3) identity: 26 plots, max difference 4.3e-14; (4) KS: first version, superseded by the review-fix version (see 'WP4 -- review fixes' and the checklist); (5) weights equal an independent numerical integral (max 1.4e-16); (6) `p1_entries` reproducible with the seed; no-ok-transition case; (7) `c5_shift` runs.
   - `Rscript R/tests/wp4_C5_toy.R` -> exact 30.52 | current 36.59 | corrected 30.56 | production functions: current 36.52, corrected 30.43 (-1.3 SE). ALL CHECKS PASSED.
   - `Rscript R/tests/wp3_B4_check.R` (mock) still passes (max |S0 - S1| 4.4e-16).
   - The new 04 block was run on a synthetic `dt2` (flags set / unset, nonzero TSD where unflagged -> 0; an NA first-visit gdd_3 stops with "A1.5").
@@ -240,3 +240,39 @@ Template:
   - `tests/23_p1_onset_bench.R` (benchmark prototype) and older diagnostics that read `inp$X` were not touched.
   - A plot starting in regen with no change observed keeps entry 0 even when no transition is ok (same as the WP3 code).
 - Git note: the WP4 commits left `.git/HEAD.lock` / `.git/index.lock` and a few `tmp_obj_*` files that the sandbox may not delete; the stale locks were moved to `.git/stale-*-wp4*` (safe to delete), the `tmp_obj_*` files are unreferenced leftovers (safe to delete).
+
+## WP4 -- review fixes (2026-11-04)
+- Commit: "WP4: review fixes" (hash: see `git log`). Review result: no code defects; fixes 1-5 below done, 6 reported and NOT changed (waiting for the user).
+- 1. C1.6 and the C5 weights (note): the corrected weight is exp(-H(W_j, lo)) * (1 - exp(-H(lo, hi))), or exp(-H(W_j, hi)) when no change is observed. The pieces BEFORE W_j cancel
+  (division by S(W_j - e)), so the corrected weights depend only on the hazards after the first visit (the observed intervals) and on the candidate e through the age W_j - e. The plan's
+  "same piecewise hazards to the first visit" therefore matters (a) for the CANDIDATES, which are drawn from the pre-W_j pieces, and (b) for the OLD weights in `wp4_C5_shift.R`,
+  whose H(0, .) includes the pre-W_j pieces; it does not change the corrected weights themselves.
+- 2. Check 4 of `R/tests/wp4_C1_check.R` rewritten: separate seed per case (20261104 + case number); the Hyman-spline CDF and the grid integration are gone. The exact side is the closed-form piecewise
+  Weibull survival S(t) = exp(-sum_k sum_q lambda_kq^alpha_k [(t1_q - e)^alpha_k - (t0_q - e)^alpha_k]) (t0 = max(a_q, e), t1 = min(b_q, t)), written in the test; the pieces (boundaries, flags, TSD at the midpoint, lambda)
+  of every case are rebuilt from the raw plot_info values, the scaling and theta, for plots 1, 2 AND 3, and compared with `p1_pieces` (max relative difference < 1e-10) before drawing. The exit-type probabilities use
+  integrate() of h_k(s) S(s) per piece. Draws still come from the production `p1_pieces` / `p1_next_exit`. All four cases at 1e5 draws, bound 0.01 unchanged (KS p / chi-square p):
+
+  | case | plot | entry | seed | exits before W_j | KS p | exit-type chi-square p |
+  |---|---|---|---|---|---|---|
+  | 1 | 1 | 0 | 20261105 | 77,059 | 0.228 | 0.352 |
+  | 2 | 1 | 5.3 | 20261106 | 69,282 | 0.605 | 0.945 |
+  | 3 | 2 | 0 | 20261107 | 73,944 | 0.080 | 0.077 |
+  | 4 | 3 | 11.7 | 20261108 | 98,052 | 0.267 | 0.455 |
+
+  All pass. Case 3 (KS 0.080, chi-square 0.077) is the lowest this time; with different seeds the earlier version had its lowest p (0.013) on plot 3. With 8 tests at a 0.01 bound, one p between 0.01 and 0.1 is unremarkable.
+- 3. Correction: the C1 unit-test cases use plots 1, 2 and 3 (three flagged plots; plot 1 twice, with entries 0 and 5.3), not "2 flagged plots". The checklist line is rewritten accordingly.
+- 4. `wp4_C1_check.R` (synthetic part and `real`): new information table, per type (fire, pest, harvest, any), of plots flagged at the first visit whose flag is OFF at the interval-1 end visit (counts and share).
+  No change to P1. On the synthetic tables 0 of 15 flagged plots; sanity of the counter: with one fire and two harvest flags switched off by hand it printed 1 and 2.
+- 5. `R/04_prepare_inla.R`: after `plot_info` is built, stop unless `fv_harv`, `fv_fire`, `fv_pest` equal `harv_start`, `fire_start`, `pest_start` of interval 1 (each only if that column exists in `iv`; all three exist). Tested on a synthetic
+  table: consistent flags pass; a harvest mismatch and a fire mismatch stop with the message; a missing `pest_start` column is skipped. Plots with a single visit have no interval 1 and are not compared.
+- 6. `lambda_matrix` `lam[is.na(lam)] <- 0` -- NOT changed. Findings: the line is from the baseline commit 2f4382a (no comment). It is NOT needed for missing coefficients: a failed fit gets `ok = FALSE`, an NA intercept and a 0 beta row,
+  and `lam[, !theta$ok] <- 0` already zeroes that column; an ok transition has no NA coefficient by construction (`ok` requires alpha, intercept and every beta non-NA; `draw_theta_m` falls back to the seed otherwise).
+  Test: with a failed fit and clean covariates, removing the NA line gives the identical matrix. The only thing the line changes is NA in the covariate matrix: X %*% t(beta) is then NA for EVERY transition of that row
+  (0 x NA = NA), so the line silently gives the plot (or interval) hazard 0 for all exits: in P1 a regen plot never leaves regen, in the weights S stays 1. Proposal for the user (not done): keep `lam[, !ok] <- 0`, replace the NA line by
+  `stopifnot(!anyNA(X))` at the top of `lambda_matrix`, so a covariate NA stops instead of switching a plot's hazards off. Needs the user's go-ahead (it changes WP3/WP4 code and the hazard of any NA row, which should not exist after A1).
+- Checks run: `Rscript R/tests/wp4_C1_check.R` -> ALL CHECKS PASSED (cloud, R 4.3.3); the 04 block tests above; `wp4_C5_toy.R` unchanged (passed at c2b2b46).
+- Checks the user must run on the Mac, after the climate import (03c -> 03z), project root, in this order:
+  1. `Rscript R/04_prepare_inla.R`  (new: the fv_ flags must equal interval 1's start flags; expect NA counts 0, 11,286 plots)
+  2. `Rscript R/tests/wp4_C1_check.R real`  (now also prints the flagged-but-off-at-interval-1 table for the real plots, per type)
+  3. optional `Rscript R/tests/04c_check_rows.R`
+  4. in WP5, after the first full imputation: `Rscript R/tests/wp4_C5_shift.R 1 1000`

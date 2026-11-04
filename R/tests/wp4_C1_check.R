@@ -7,7 +7,8 @@
 #   2  pieces: grid from the first onset, EXTRA breakpoint at the exact onset of a later type (user decision 2026-11-04), onset <= 0 from time 0,
 #      TSD at each piece midpoint, flags of the last piece = first-visit flags, contiguous cover of [0, end of the weighting bracket]
 #   3  identity: plots without an onset before W_j give the same candidates as the WP3 p1_candidates fed the same first-visit lambda (same seed)
-#   4  C1 unit test: 100,000 piecewise exit draws vs the exact piecewise survival (Kolmogorov-Smirnov p > 0.01; exit type chi-square p > 0.01)
+#   4  C1 unit test: 100,000 piecewise exit draws vs the exact piecewise survival, rebuilt independently of the production code (KS p > 0.01; exit type
+#      chi-square p > 0.01); 4 cases, a separate seed each; every p-value is printed with its case
 #   5  weights: p1_weights_pw (log space) vs an independent numerical integration of the piecewise hazard
 #   6  p1_entries runs end to end (mean and draw), reproducible with the seed; fallback table by first state
 # ==============================================================================
@@ -135,32 +136,57 @@ ok(worst < 1e-9, sprintf("candidates differ from p1_candidates: max %.3e", worst
 cat(sprintf("3. identity: %d plots without an onset before W_j, same seed: identical candidates (max |difference| %.1e)\n", n3, worst))
 
 # ---- 4. KS test of piecewise exit draws ---------------------------------------------------------------------------------------------------------
+# The DRAWS come from the production code (p1_pieces -> p1_next_exit, pieces of pcs). The EXACT side is written here without any production function:
+# the piece boundaries and the hazard of every piece are rebuilt from the raw first-visit values of plot_info, the scaling and theta (not from inp$X0,
+# not from pc), and the survival is the closed-form piecewise Weibull S(t) = exp(-sum_k sum_pieces lambda_kq^alpha_k [(t_q1 - e)^alpha_k - (t_q0 - e)^alpha_k]),
+# t_q0 = max(a_q, e), t_q1 = min(b_q, t) (pieces beyond t or before e contribute 0). Each case has its own seed.
 NDRAW <- 100000L
-GL <- local({ n <- 8; i <- seq_len(n - 1); J <- matrix(0, n, n); J[cbind(i, i + 1)] <- J[cbind(i + 1, i)] <- i / sqrt(4 * i^2 - 1)
-  e <- eigen(J, symmetric = TRUE); o <- order(e$values); list(x = e$values[o], w = 2 * e$vectors[1, o]^2) })
-# independent exact cumulative hazard of exit k from entry e: Gauss-Legendre on a fine grid of cells (breakpoints included), then monotone interpolation
-exact_cdf <- function(pc, ks, alpha, e, W) {
-  brk <- sort(unique(c(e, pc$p0[1:pc$npre][pc$p0[1:pc$npre] > e], seq(e, W, length.out = 3000), W)))
-  hz <- function(s, k) { q <- findInterval(s, pc$p0[1:pc$npre], rightmost.closed = FALSE); alpha[k] * pc$L[q, k]^alpha[k] * (s - e)^(alpha[k] - 1) }
-  cell <- function(a, b, k) { m <- (a + b) / 2; h <- (b - a) / 2; sum(GL$w * hz(m + h * GL$x, k)) * h }
-  Hk <- sapply(ks, function(k) c(0, cumsum(mapply(cell, brk[-length(brk)], brk[-1], k))))
-  Ht <- rowSums(Hk); list(grid = brk, H = Ht, Hk = Hk, F = splinefun(brk, Ht, method = "hyman"))
+stopifnot("check 4 builds log1p TSD columns by hand" = TSD_FORM == "log1p")
+ind_pieces <- function(id) {          # list(a, b, lam = pieces x K) for plot `id`, from raw values
+  p <- pi_all[id_pe == id]; W <- p$W_j; sc <- inp$scaling; trm <- inp$terms
+  onset <- c(fire = if (p$fv_fire == 1L) W - p$fv_tsd_fire_y, pest = if (p$fv_pest == 1L) W - p$fv_tsd_pest_y, harv = if (p$fv_harv > 0L) W - p$fv_tsd_harv_y)
+  lvl <- if (p$fv_harv == 2L) "harv_heavy" else "harv_light"
+  g0 <- if (length(onset)) max(0, min(onset)) else Inf
+  bk <- sort(unique(c(0, if (g0 < W) seq(g0, W, by = 1), onset[onset > 0 & onset < W]))); bk <- bk[bk < W - 1e-9]; bk <- c(bk, W)
+  a <- bk[-length(bk)]; b <- bk[-1]; mid <- (a + b) / 2
+  zg <- (p$fv_gdd_3 - sc[var == "gdd_3", mean]) / sc[var == "gdd_3", sd]
+  lam <- t(sapply(seq_along(a), function(q) {
+    x <- setNames(numeric(length(trm)), trm)
+    x[["z_gdd_3"]] <- zg; x[["z_cmi_gs"]] <- (p$fv_cmi_gs - sc[var == "cmi_gs", mean]) / sc[var == "cmi_gs", sd]
+    x[["z_soil_pc1"]] <- (p$fv_soil_pc1 - sc[var == "soil_pc1", mean]) / sc[var == "soil_pc1", sd]
+    for (ty in names(onset)) if (mid[q] >= onset[[ty]]) {
+      nm <- switch(ty, fire = "fire", pest = "pest", harv = sub("harv_", "", lvl))
+      fl <- switch(ty, fire = "fire_f", pest = "pest_f", harv = lvl); ts <- switch(ty, fire = "tsd_fire", pest = "tsd_pest", harv = paste0("tsd_", lvl))
+      gx <- switch(ty, fire = "gdd_x_fire", pest = "gdd_x_pest", harv = paste0("gdd_x_", lvl))
+      x[[fl]] <- 1; x[[gx]] <- zg; x[[ts]] <- log(mid[q] - onset[[ty]] + 1) }
+    exp(theta$intercept + drop(theta$beta %*% x)) }))
+  list(a = a, b = b, lam = lam, W = W)
 }
-for (case in list(list(id = 1, e = 0), list(id = 1, e = 5.3), list(id = 2, e = 0), list(id = 3, e = 11.7))) {
-  jx <- jj(case$id); pc <- pcs[[jx]]; W <- inp$p1$W_j[jx]; e <- case$e
-  st0 <- inp$start_idx; ks <- inp$out_k[[st0]]; ex <- exact_cdf(pc, ks, theta$alpha, e, W)
+S_exact <- function(ip, ks, e, t) {   # vectorised in t; total survival of the exits ks of the start state, sojourn entered at e
+  H <- numeric(length(t))
+  for (q in seq_along(ip$a)) { t0 <- max(ip$a[q], e); t1 <- pmax(pmin(ip$b[q], t), t0)
+    for (k in ks) H <- H + ip$lam[q, k]^theta$alpha[k] * ((t1 - e)^theta$alpha[k] - (t0 - e)^theta$alpha[k]) }
+  exp(-H)
+}
+cases <- list(list(id = 1, e = 0), list(id = 1, e = 5.3), list(id = 2, e = 0), list(id = 3, e = 11.7)); KS_LOG <- list()
+for (ci in seq_along(cases)) { case <- cases[[ci]]
+  jx <- jj(case$id); pc <- pcs[[jx]]; W <- inp$p1$W_j[jx]; e <- case$e; ks <- inp$out_k[[inp$start_idx]]; ip <- ind_pieces(case$id)
+  ok(max(abs(ip$lam - pc$L[1:pc$npre, ])) < 1e-10 * max(ip$lam) && isTRUE(all.equal(c(ip$a, ip$W), c(pc$p0[1:pc$npre], W))),
+     sprintf("plot %d: independent pieces differ from p1_pieces", case$id))
   p0 <- pc$p0[1:pc$npre]; p1e <- pc$p1[1:pc$npre]; LA <- pc$LA[1:pc$npre, , drop = FALSE]
-  set.seed(7 + case$id); dr <- t(vapply(seq_len(NDRAW), function(i) p1_next_exit(p0, p1e, LA, theta$alpha, ks, e, -log(runif(length(ks)))), c(0, 0)))
-  hit <- dr[, 1] < W; Fw <- 1 - exp(-ex$H[length(ex$H)])
-  u <- (1 - exp(-ex$F(dr[hit, 1]))) / Fw
-  pks <- suppressWarnings(ks.test(u, "punif"))$p.value   # ties: runif has 32-bit granularity (about 1e-4 of the draws repeat); harmless
-  # exit type: P(k, exit before W) = int h_k S_total
-  Stot <- exp(-ex$H); hk <- function(k) { ik <- match(k, ks); h <- diff(ex$grid); inc <- diff(ex$Hk[, ik]); (inc / pmax(diff(ex$H), 1e-300)) * (Stot[-length(Stot)] - Stot[-1]) }
-  pk_exact <- sapply(ks, hk) |> colSums(); pk_exact <- c(pk_exact, 1 - sum(pk_exact))
-  obs <- c(table(factor(dr[hit, 2], levels = ks)), sum(!hit)); pchi <- chisq.test(obs, p = pk_exact / sum(pk_exact))$p.value
-  cat(sprintf("4. plot %d, entry %.1f: %d draws, %d exit before W_j=%.1f | KS p = %.3f | exit type chi-square p = %.3f\n", case$id, e, NDRAW, sum(hit), W, pks, pchi))
-  ok(pks > 0.01, sprintf("KS p = %.4f <= 0.01 (plot %d, entry %.1f)", pks, case$id, e))
-  ok(pchi > 0.01, sprintf("exit-type chi-square p = %.4f <= 0.01 (plot %d, entry %.1f)", pchi, case$id, e), rbind(observed = obs, expected = round(pk_exact / sum(pk_exact) * sum(obs), 1)))
+  set.seed(20261104L + ci)
+  dr <- t(vapply(seq_len(NDRAW), function(i) p1_next_exit(p0, p1e, LA, theta$alpha, ks, e, -log(runif(length(ks)))), c(0, 0)))
+  hit <- dr[, 1] < W; FW <- 1 - S_exact(ip, ks, e, W)
+  u <- (1 - S_exact(ip, ks, e, dr[hit, 1])) / FW                       # conditional CDF given an exit before W_j
+  pks <- suppressWarnings(ks.test(u, "punif"))$p.value                  # ties: runif has 32-bit granularity; harmless
+  # exit type: P(k, exit before W) = integral of h_k(s) S_tot(s) ds, piece by piece with integrate()
+  pk <- sapply(ks, function(k) sum(sapply(seq_along(ip$a), function(q) { t0 <- max(ip$a[q], e); if (ip$b[q] <= t0) return(0)
+    integrate(function(s) theta$alpha[k] * ip$lam[q, k]^theta$alpha[k] * (s - e)^(theta$alpha[k] - 1) * S_exact(ip, ks, e, s), t0, ip$b[q], rel.tol = 1e-10)$value })))
+  pk <- c(pk, 1 - sum(pk)); obs <- c(table(factor(dr[hit, 2], levels = ks)), sum(!hit)); pchi <- chisq.test(obs, p = pk)$p.value
+  KS_LOG[[ci]] <- data.table(case = ci, plot = case$id, entry = e, seed = 20261104L + ci, n_draws = NDRAW, n_exit = sum(hit), ks_p = pks, chisq_p = pchi)
+  cat(sprintf("4. case %d: plot %d, entry %.1f, seed %d: %d draws, %d exit before W_j=%.1f | KS p = %.3f | exit type chi-square p = %.3f\n", ci, case$id, e, 20261104L + ci, NDRAW, sum(hit), W, pks, pchi))
+  ok(pks > 0.01, sprintf("KS p = %.4f <= 0.01 (case %d: plot %d, entry %.1f)", pks, ci, case$id, e))
+  ok(pchi > 0.01, sprintf("exit-type chi-square p = %.4f <= 0.01 (case %d: plot %d, entry %.1f)", pchi, ci, case$id, e), rbind(observed = obs, expected = round(pk * sum(obs), 1)))
 }
 
 # ---- 5. weights vs independent numerical integration --------------------------------------------------------------------------------------------
@@ -201,6 +227,18 @@ ok(nrow(rs) > 0 && all(is.finite(rs$entry_old)) && all(is.finite(rs$entry_new)),
 cat(sprintf("7. c5_shift on %d synthetic plots: mean old - corrected = %.2f y (random theta: information only here)\n", nrow(rs), mean(rs$entry_old - rs$entry_new)))
 invisible(capture.output(c5_report(copy(rs))))
 
+# ---- information: first-visit flags that are off at the interval-1 end visit (per type; no change to P1) -------------------------------------------
+off_at_end1 <- function(ir) {
+  i1 <- ir$iv[interval == 1L]; fvq <- ir$p1[match(i1$id_pe, id_pe)]; jf <- match(i1$id_pe, ir$p1$id_pe)
+  f <- list(fire = list(fv = ir$X1[jf, "fire_f"] == 1, off = i1$fire == 0L), pest = list(fv = ir$X1[jf, "pest_f"] == 1, off = i1$pest == 0L),
+            harvest = list(fv = ir$on$harv_lvl[jf] > 0L, off = i1$harv == 0L))
+  r <- rbindlist(lapply(names(f), function(t) data.table(type = t, flagged_at_first_visit = sum(f[[t]]$fv), off_at_interval1_end = sum(f[[t]]$fv & f[[t]]$off))))
+  r <- rbind(r, data.table(type = "any type", flagged_at_first_visit = sum(Reduce(`|`, lapply(f, `[[`, "fv"))),
+                           off_at_interval1_end = sum(Reduce(`|`, lapply(f, function(x) x$fv & x$off)))))
+  r[, share_off := off_at_interval1_end / pmax(flagged_at_first_visit, 1L)]; r[]
+}
+cat("\nInformation (no change to P1): plots flagged at the first visit whose flag is OFF at the interval-1 end visit:\n"); print(off_at_end1(inp))
+
 # ---- real tables (Mac) ------------------------------------------------------------------------------------------------------------------------------
 if (REAL) {
   cat("\n== real tables:", TABLE_DIR, "==\n")
@@ -220,6 +258,7 @@ if (REAL) {
   jf <- match(sample(fl, min(300, length(fl))), ir$p1$id_pe); np <- integer(length(jf))
   for (i in seq_along(jf)) { pc <- p1_pieces(jf[i], thr, ir, L0r, Livr); np[i] <- pc$npre
     ok(all(abs(pc$p0[-1] - pc$p1[-length(pc$p1)]) < 1e-9) && abs(pc$p1[pc$npre] - ir$p1$W_j[jf[i]]) < 1e-9 && abs(tail(pc$p1, 1) - ir$p1$obs_upper[jf[i]]) < 1e-9, paste("real: pieces of plot", ir$p1$id_pe[jf[i]])) }
+  cat("\nReal tables, information (no change to P1): plots flagged at the first visit whose flag is OFF at the interval-1 end visit:\n"); print(off_at_end1(ir))
   cat(sprintf("pieces before the first visit in %d flagged plots: median %d, max %d; all contiguous from 0 to the end of the weighting bracket\n", length(jf), as.integer(median(np)), max(np)))
 }
 cat("\nALL CHECKS PASSED\n")
