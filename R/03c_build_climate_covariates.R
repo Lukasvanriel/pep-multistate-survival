@@ -194,21 +194,42 @@ load_cmi <- function(dest_dir) {
   list(monthly = rast(m_files[ord]), sum = rast(s_files))
 }
 
-# resume support: load whatever's already been extracted
-if (file.exists(CKPT_PATH)) {
-  long_dt <- readRDS(CKPT_PATH)
-  done_years <- unique(long_dt$year)
-  cat(sprintf("Resuming: %d years already in checkpoint.\n", length(done_years)))
-} else {
-  long_dt <- data.table()
-  done_years <- integer(0)
+# A1 (2026-11-04): the checkpoint is checked per PLOT-YEAR, not per year. Plots added to the analysis after the checkpoint was
+# saved (5 plots on 2026-11-03) are extracted for the years their windows need; plots/years already in the checkpoint are not touched.
+# Safety copies of the old files (made once; never overwritten): *.pre_A1.rds, used to verify that old visits are unchanged.
+for (f in c(CKPT_PATH, OUT_PATH)) {
+  bak <- sub("\\.rds$", ".pre_A1.rds", f)
+  if (file.exists(f) && !file.exists(bak)) {
+    stopifnot("could not copy the pre-A1 backup" = file.copy(f, bak, overwrite = FALSE))
+    cat(sprintf("Backup written: %s\n", basename(bak)))
+  }
 }
 
-pts_ll <- vect(pep[, "id_pe"])
+if (file.exists(CKPT_PATH)) {
+  long_dt <- readRDS(CKPT_PATH)
+  cat(sprintf("Resuming: checkpoint has %d years, %d plots, %d plot-years.\n",
+              uniqueN(long_dt$year), uniqueN(long_dt$id_pe), nrow(long_dt)))
+} else {
+  long_dt <- data.table()
+}
 
-for (yr in years_needed) {
-  if (yr %in% done_years) next
-  cat(sprintf("\n== year %d ==\n", yr))
+stopifnot("duplicate id_pe in PEP placette layer" = !anyDuplicated(pep$id_pe),
+          "visits with a plot that has no location in PEP.gpkg" = all(visits$id_pe %in% pep$id_pe))
+
+# every plot-year the visit windows need (step 2), minus what the checkpoint holds
+need <- unique(visits[win_start <= win_end, .(year = seq.int(win_start, win_end)), by = .(id_pe, no_mes)][, .(id_pe, year)])
+miss <- if (nrow(long_dt) == 0L) need else need[!long_dt[, .(id_pe, year)], on = c("id_pe", "year")]
+years_todo <- sort(unique(miss$year))
+cat(sprintf("Plot-years needed: %d | missing from the checkpoint: %d (%d plots, %d years)\n",
+            nrow(need), nrow(miss), uniqueN(miss$id_pe), length(years_todo)))
+if (nrow(miss) > 0) print(miss[, .(n_years = .N, from = min(year), to = max(year)), by = id_pe][order(id_pe)])
+
+for (yr in years_todo) {
+  ids_yr <- miss[year == yr, id_pe]
+  pep_yr <- pep[pep$id_pe %in% ids_yr, ]
+  stopifnot(nrow(pep_yr) == length(ids_yr))
+  pts_ll <- vect(pep_yr[, "id_pe"])           # ONLY the plots missing in this year
+  cat(sprintf("\n== year %d (%d plots) ==\n", yr, length(ids_yr)))
 
   sg_dir  <- download_zip("sg", yr)
   cmi_dir <- download_zip("cmi", yr)
@@ -238,7 +259,7 @@ for (yr in years_needed) {
   colnames(vals_cmi_sum) <- c("ID", "cmi_sum")
 
   year_dt <- data.table(
-    id_pe = pep$id_pe,
+    id_pe = pep_yr$id_pe,
     year  = yr,
     vals_sg[, -1],
     vals_cmi_m[, -1],
@@ -264,6 +285,7 @@ for (yr in years_needed) {
 
 cat(sprintf("\nAll years processed. Checkpoint has %d years, %d rows.\n",
             uniqueN(long_dt$year), nrow(long_dt)))
+stopifnot("duplicate (id_pe, year) in the checkpoint" = !anyDuplicated(long_dt, by = c("id_pe", "year")))
 
 ## ---- 4b. growing-season-matched CMI per plot-year (decided 2026-10-24) --
 ## cmi_gs = sum_m cmi_m x (days of month m inside [start_gs, end_gs]) / (days in month m).
@@ -291,6 +313,21 @@ long_dt[, cmi_gs := gsm$cmi_gs]
 cat(sprintf("\nGS-matched CMI: %d plot-years, %d NA (missing season dates or in-season CMI); %.1f%% of plot-years have season days outside May-Oct.\n",
             nrow(long_dt), sum(is.na(long_dt$cmi_gs)), 100 * mean(rowSums(gsm$w[, c(1:4, 11:12), drop = FALSE]) > 0, na.rm = TRUE)))
 rm(gsm)
+
+## A1 guard (2026-11-04): every needed plot-year must be present (a failed download is not skipped silently) and have no NA in the
+## four variables that define gdd_3 and cmi_gs. mean(na.rm = TRUE) in step 5 would otherwise average fewer years without a signal.
+used <- long_dt[need, on = c("id_pe", "year"), nomatch = NULL]
+if (nrow(used) != nrow(need)) {
+  print(need[!long_dt[, .(id_pe, year)], on = c("id_pe", "year")][, .(n_years = .N, from = min(year), to = max(year)), by = id_pe])
+  stop(sprintf("A1: %d needed plot-years are missing from the extraction (failed download?). Rerun 03c.", nrow(need) - nrow(used)))
+}
+na_used <- used[is.na(gdd_3) | is.na(cmi_gs) | is.na(start_gs) | is.na(end_gs), .(id_pe, year, gdd_3, cmi_gs, start_gs, end_gs)]
+if (nrow(na_used) > 0) {
+  print(head(na_used, 30))
+  stop(sprintf("A1: %d used plot-years have NA in gdd_3 / cmi_gs / start_gs / end_gs (%d plots).", nrow(na_used), uniqueN(na_used$id_pe)))
+}
+cat(sprintf("A1 guard: all %d needed plot-years present, 0 NA in gdd_3 / cmi_gs / start_gs / end_gs.\n", nrow(used)))
+rm(used)
 
 ## ---- 5. per-visit truncated trailing average -----------------------------
 
@@ -327,14 +364,13 @@ cat(sprintf(
   n_incomplete, nrow(out), 100 * n_incomplete / nrow(out), TRAIL_WINDOW
 ))
 
-n_all_na <- sum(out$n_years_used == 0)
-if (n_all_na > 0) {
-  cat(sprintf(
-    "*** FLAG: %d plot-visits have n_years_used == 0 -- completely outside the 1960-2022 window. These have NA climate covariates. Inspect: ***\n",
-    n_all_na
-  ))
-  print(out[n_years_used == 0, .(id_pe, no_mes, year)])
+## A1 guard (2026-11-04): stop unless EVERY visit used its full (already 1960-2022-clipped) window.
+bad <- out[n_years_used != (win_end - win_start + 1L) | n_years_used < 1L]
+if (nrow(bad) > 0) {
+  print(head(bad[, .(id_pe, no_mes, year, win_start, win_end, n_years_used)], 30))
+  stop(sprintf("A1: %d plot-visits do not have n_years_used == win_end - win_start + 1 (>= 1). climate_covariates.rds NOT written.", nrow(bad)))
 }
+cat(sprintf("A1 guard: all %d plot-visits have n_years_used == window length.\n", nrow(out)))
 
 saveRDS(out, OUT_PATH)
 cat(sprintf("\nSaved: %s\n", OUT_PATH))

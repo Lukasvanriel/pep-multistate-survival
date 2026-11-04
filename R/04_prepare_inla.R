@@ -96,6 +96,17 @@ iv[, `:=`(tsd_fire = fifelse(fire == 1L, tsd_fire / 10, 0),
           tsd_harv = fifelse(harv >  0L, tsd_harv / 10, 0))]
 stopifnot(!anyNA(iv[, .(tsd_fire, tsd_pest, tsd_harv)]), all(iv[, .(tsd_fire, tsd_pest, tsd_harv)] >= 0))
 
+# A1 (2026-11-04): no NA climate / soil covariate may reach INLA (it would be read as 0 = the mean).
+#   iv        : end-visit values of every interval
+#   first row : first visit of each plot (never an end visit; needed by P1, C1)
+cat(sprintf("\nNA check: intervals gdd_3=%d cmi_gs=%d soil_pc1=%d | first visits gdd_3=%d cmi_gs=%d soil_pc1=%d\n",
+            sum(is.na(iv$gdd_3)), sum(is.na(iv$cmi_gs)), sum(is.na(iv$soil_pc1)),
+            sum(is.na(dt2[, .SD[1L], by = id_pe]$gdd_3)), sum(is.na(dt2[, .SD[1L], by = id_pe]$cmi_gs)),
+            sum(is.na(dt2[, .SD[1L], by = id_pe]$soil_pc1))))
+stopifnot("NA in gdd_3 / cmi_gs / soil_pc1 of the visit intervals (A1)" = !anyNA(iv[, .(gdd_3, cmi_gs, soil_pc1)]),
+          "NA in gdd_3 / cmi_gs / soil_pc1 of a plot's first visit (A1.5)" =
+            !anyNA(dt2[, .SD[1L], by = id_pe][, .(gdd_3, cmi_gs, soil_pc1)]))
+
 stopifnot(all(iv$t_end - iv$t_start == iv$year_end - iv$year_start))
 cat(sprintf("\nVisit-interval table: %d intervals, %d plots, %d with a state change\n",
             nrow(iv), uniqueN(iv$id_pe), sum(iv$is_change)))

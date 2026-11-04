@@ -183,6 +183,12 @@ if (nrow(combined) != uniqueN(combined, by = c("id_pe", "no_mes"))) {
        "cartesian blow-up somewhere. Investigate before saving.")
 }
 
+## A1 (2026-11-04): INLA treats an NA covariate as 0 (= the mean), so none may pass. Checked on all visits, before saving.
+na_cnt <- sapply(combined[, .(gdd_3, cmi_gs, soil_pc1)], function(x) sum(is.na(x)))
+cat("NA count in gdd_3 / cmi_gs / soil_pc1:", paste(names(na_cnt), na_cnt, sep = "=", collapse = ", "), "\n")
+if (any(na_cnt > 0)) print(head(combined[is.na(gdd_3) | is.na(cmi_gs) | is.na(soil_pc1), .(id_pe, no_mes, year, n_years_used)], 30))
+stopifnot("NA in gdd_3 / cmi_gs / soil_pc1 of the combined table (A1)" = !anyNA(combined[, .(gdd_3, cmi_gs, soil_pc1)]))
+
 dir.create(dirname(OUT_PATH), showWarnings = FALSE, recursive = TRUE)
 saveRDS(combined, OUT_PATH)
 cat(sprintf("Saved: %s\n", OUT_PATH))
