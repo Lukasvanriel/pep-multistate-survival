@@ -189,6 +189,12 @@ Template:
 ## WP3 -- fix variant check (2026-11-04)
 - Commit: "WP3: fix variant check" (hash: see `git log`).
 - Diagnosis (by the user on the Mac, `Rscript R/tests/wp3_B4_check.R inla` failed): INLA was given the right settings. `.args$control.family` is a LIST OF ONE per-likelihood list, so the variant is at `.args$control.family[[1]]$variant` (= 0L); `control.fixed` mean 0 / prec 0.04 / mean.intercept 0 / prec.intercept 0 confirmed in `.args` and in `all.hyper$fixed`. The test read `.args$control.family$variant`, which is NULL; `c()` dropped it and the settings table shifted by one row, so the failure was the test's, not the fit's.
-- The variant assertion in 4237012 (`mods[[1]]$.args$control.family$variant == 0L` in `stopifnot`) was VACUOUS: NULL == 0L is logical(0), which passes `stopifnot`. The review-fixes version (0b58fb6/7538746) built the table with the same wrong path. Variant 0 is confirmed by the user's Mac fit via the corrected path (`control.family[[1]]$variant` = 0L); it was not confirmed by any earlier test run.
+- The variant assertion in 4237012 (`mods[[1]]$.args$control.family$variant == 0L` in `stopifnot`) was VACUOUS: NULL == 0L is logical(0), which passes `stopifnot`. The review-fixes version (7538746; 0b58fb6 was the pre-amend commit, now orphaned) built the table with the same wrong path. Variant 0 is confirmed by the user's Mac fit via the corrected path (`control.family[[1]]$variant` = 0L); it was not confirmed by any earlier test run.
 - Changes: `R/tests/wp3_B4_check.R` reads `control.family[[1]]$variant`; the settings are collected in a named list and every value must have length 1, be numeric and not NA before the table is built, otherwise the check stops with a message naming the missing setting (no silent drop). Dry-run with a stub model shaped like INLA's `.args` (list of one): passes; a missing variant stops naming it; variant 1 stops with the table. Checklist lines 45 and 70 (B1 note, WP5 run_meta command) use `control.family[[1]]$variant`.
-- Open: `Rscript R/tests/wp3_B4_check.R inla` has to be rerun on the Mac after this fix (the remaining checks of the test after the settings table have not run on real INLA yet).
+- Done (user, Mac, 2026-11-04): `Rscript R/tests/wp3_B4_check.R inla` rerun after this fix: ALL CHECKS PASSED, variant 0 confirmed. B4 unit test ticked.
+
+## WP3 -- close (2026-11-04)
+- Commit: "WP3: close" (docs only, no code).
+- Plan error (plan is read-only, not edited): the B1 check string `run_meta$inla_args$control.family$variant == 0` is NULL in practice; `.args$control.family` is a list of one, so the correct path is `control.family[[1]]$variant`. The checklist (B1 note, WP5 run_meta command) and `wp3_B4_check.R` already use it.
+- B4 unit test ticked (Mac run 2026-11-04, ALL CHECKS PASSED, variant 0 confirmed). B1 and B2 stay unticked until the WP5 run_meta check; B5 until the first 07 run.
+- WP3 review ticked.
