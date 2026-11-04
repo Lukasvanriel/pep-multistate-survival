@@ -110,7 +110,7 @@ build_rows <- function(iv, first_entry, states, tr, p2_fun = p2_midpoint,
 # and compares them with the transition set. Returns the table; stops if any kept
 # transition no longer passes the thresholds or the counts disagree.
 # ------------------------------------------------------------------------------
-recount_events <- function(rows, tr, min_events = 15L) {
+recount_events <- function(rows, tr, min_events = MIN_EVENTS) {   # MIN_EVENTS from R/config.R (source it first)
   ev <- rows[status == 1L & kept == TRUE]
   cnt <- ev[, .(n_events = .N, n_fire = sum(fire == 1L), n_pest = sum(pest == 1L),
                 n_harv0 = sum(harv == 0L), n_harv1 = sum(harv == 1L), n_harv2 = sum(harv == 2L)),
@@ -121,9 +121,8 @@ recount_events <- function(rows, tr, min_events = 15L) {
   chk[, ok_counts := n_events == e0 & n_fire == f0 & n_pest == p0 & n_harv0 == h00 & n_harv1 == h10 & n_harv2 == h20]
   chk[, ok_thresholds := n_events >= min_events &
         (!fire_term | n_fire >= min_events) & (!pest_term | n_pest >= min_events) &
-        (harv_term != "3level" | (n_harv0 >= min_events & n_harv1 >= min_events & n_harv2 >= min_events)) &
-        (harv_term != "any" | (n_harv0 >= min_events & n_harv1 + n_harv2 >= min_events))]
+        (harv_term != "3level" | (n_harv1 + n_harv2 >= min_events))]    # A2: light + heavy together
   if (anyNA(chk$ok_counts) || !all(chk$ok_counts)) stop("recount_events: event counts differ from transition_set")
-  if (!all(chk$ok_thresholds)) stop("recount_events: a kept transition/term no longer passes the >= 15 rule")
+  if (!all(chk$ok_thresholds)) stop("recount_events: a kept transition/term no longer passes the >= MIN_EVENTS rule")
   chk[]
 }

@@ -30,6 +30,7 @@ b <- build_rows(iv, first_entry, states, tr)
 cat(sprintf("Built %d rows from %d segments, %d plots (%.1f s)\n", nrow(b$rows), nrow(b$segs), b$n_plots, proc.time()["elapsed"] - t0))
 rows <- b$rows; segs <- b$segs
 nd <- length(states) - 1L
+eq <- function(a, b) isTRUE(all.equal(a, b))
 ok <- function(label, cond) { cat(sprintf("  [%s] %s\n", if (isTRUE(cond)) "PASS" else "FAIL", label)); if (!isTRUE(cond)) stop("check failed: ", label) }
 
 cat("\nCHECK 1: bookkeeping\n")
@@ -90,10 +91,54 @@ cat("\nCHECK 5 (B7): recount of events on the final rows\n")
 rc <- recount_events(rows, tr)
 cat(sprintf("  kept transitions %d, events %d, all counts equal transition_set and all thresholds pass\n", nrow(rc), sum(rc$n_events)))
 
-cat("\nB1 spec preview (placeholder continuous set: ", paste(COV_CONT, collapse = ", "), ")\n", sep = "")
+cat("\nCHECK 6 (WP2: A2-A11, B7): term set, TSD columns, heavy-disturbance dates\n")
 m <- term_mask(tr)
-cat(sprintf("  kept transitions %d | formulas with fire %d, pest %d, harv 3level %d, harv any %d\n",
-            nrow(m), sum(m[, "fire_f"]), sum(m[, "pest_f"]), sum(m[, "harv_light"]), sum(m[, "harv_any"])))
+kt <- tr[kept == TRUE]; lab <- rownames(m)
+has_dist <- kt$fire_term | kt$pest_term | kt$harv_term == "3level"
+ok("B7: switches defined in config.R (WEIBULL_VARIANT, COEF_PRIOR_SD, TSD_FORM, MIN_EVENTS, XREGEN_EXIT_RULE)",
+   all(vapply(c("WEIBULL_VARIANT", "COEF_PRIOR_SD", "TSD_FORM", "MIN_EVENTS", "XREGEN_EXIT_RULE"), exists, logical(1))) && TSD_FORM %in% c("log1p", "linear"))
+ok("A2: harv_term is only 3level or none; 3level <=> kept and light + heavy >= MIN_EVENTS (no 'any')",
+   all(tr$harv_term %in% c("3level", "none")) && all((tr$harv_term == "3level") == (tr$kept & tr$n_harv1 + tr$n_harv2 >= MIN_EVENTS)))
+ok("A2: no harv_any / gdd_x_harv_any / tsd_harv term anywhere in the spec", !any(c("harv_any", "gdd_x_harv_any", "tsd_harv") %in% all_terms()) && !any(grepl("harv_any", colnames(m))))
+ok("A3: fire / pest terms <=> kept and >= MIN_EVENTS events with the flag", all(tr$fire_term == (tr$kept & tr$n_fire >= MIN_EVENTS)) && all(tr$pest_term == (tr$kept & tr$n_pest >= MIN_EVENTS)))
+ok("A6: harvest level terms: main for 3level; GDD x and TSD only with >= 1 event of the level",
+   all(m[, "harv_light"] == (kt$harv_term == "3level")) && all(m[, "harv_heavy"] == (kt$harv_term == "3level")) &&
+   all(m[, "gdd_x_harv_light"] == (kt$harv_term == "3level" & kt$n_harv1 > 0)) && all(m[, "tsd_harv_light"] == m[, "gdd_x_harv_light"]) &&
+   all(m[, "gdd_x_harv_heavy"] == (kt$harv_term == "3level" & kt$n_harv2 > 0)) && all(m[, "tsd_harv_heavy"] == m[, "gdd_x_harv_heavy"]))
+cat("  A6: 3level transitions with a 0-event level (main term only):\n")
+print(kt[harv_term == "3level" & (n_harv1 == 0L | n_harv2 == 0L), .(from, to, n_harv0, n_harv1, n_harv2)])
+if ("other_temperate->yellow_birch" %in% lab) {
+  r <- m["other_temperate->yellow_birch", ]
+  ok("A7: other_temperate->yellow_birch has harv_term 3level (heavy main term present)", kt[from == "other_temperate" & to == "yellow_birch", harv_term] == "3level" && r["harv_heavy"] && r["harv_light"])
+  cat("  A6/A7 terms of other_temperate->yellow_birch: ", paste(colnames(m)[r], collapse = " + "), "\n", sep = "")
+}
+ok("A11: z_gdd_3 absent <=> n_undist == 0 and >= 1 disturbance term; every other base term present",
+   all(m[, "z_gdd_3"] == !(kt$n_undist == 0L & has_dist)) && all(m[, c("z_cmi_gs", "z_soil_pc1")]))
+cat("  A11: transitions without z_gdd_3: ", paste(lab[!m[, "z_gdd_3"]], collapse = ", "), "\n", sep = "")
+if ("regen->sugar_maple" %in% lab) ok("A11: regen->sugar_maple has no z_gdd_3 but keeps gdd_x_harv_light / heavy", !m["regen->sugar_maple", "z_gdd_3"] && all(m["regen->sugar_maple", c("gdd_x_harv_light", "gdd_x_harv_heavy")]))
+ok("A11: n_undist <= n_events for every transition", all(tr$n_undist <= tr$n_events))
+
+sc <- make_scaling(iv)
+dm <- add_model_covariates(iv, sc); dl <- add_model_covariates(iv, sc, tsd_form = "linear")
+ok("A4: at most one of tsd_harv_light / tsd_harv_heavy is non-zero per interval", all(dm$tsd_harv_light == 0 | dm$tsd_harv_heavy == 0))
+ok("A4: each harvest TSD column is 0 wherever its level flag is 0", all(dm$tsd_harv_light[dm$harv_light == 0L] == 0) && all(dm$tsd_harv_heavy[dm$harv_heavy == 0L] == 0))
+ok("A5: model TSD columns = flag * f(TSD years) for TSD_FORM (log1p main)",
+   eq(dm$tsd_fire, dm$fire_f * log1p(dm$tsd_fire_y)) && eq(dm$tsd_harv_heavy, dm$harv_heavy * log1p(dm$tsd_harv_y)) && eq(dm$tsd_pest, dm$pest_f * log1p(dm$tsd_pest_y)))
+ok("A5: TSD_FORM linear gives TSD in decades (S24)", eq(dl$tsd_harv_light, dl$harv_light * dl$tsd_harv_y / 10) && eq(dl$tsd_fire, dl$fire_f * dl$tsd_fire_y / 10))
+cat(sprintf("  A5: max TSD years fire %.1f, pest %.1f, harvest %.1f (A8: no cap) | max model column (log1p) %.2f (plan: log(176) ~ 5.2 on the full table)\n",
+            max(iv$tsd_fire_y), max(iv$tsd_pest_y), max(iv$tsd_harv_y), max(dm[, .(tsd_fire, tsd_pest, tsd_harv_light, tsd_harv_heavy)])))
+
+ok("A9: D_harv_heavy / D_fire / D_heavy exist; D_heavy is the earlier of the two", all(c("D_harv_heavy", "D_fire", "D_heavy") %in% names(iv)) &&
+   identical(is.na(iv$D_heavy), is.na(iv$D_harv_heavy) & is.na(iv$D_fire)) && all(iv[!is.na(D_heavy), D_heavy == pmin(D_harv_heavy, D_fire, na.rm = TRUE)]))
+ok("A9: D_harv_heavy only where the end visit shows heavy harvest, D_fire only where it shows fire", all(iv[!is.na(D_harv_heavy), harv == 2L]) && all(iv[!is.na(D_fire), fire == 1L]))
+ok("A9: every date lies in (year_start, year_end]", all(iv[!is.na(D_heavy), D_heavy > year_start & D_heavy <= year_end]))
+xr <- iv[is_change == TRUE & state_end == "regen"]
+cat(sprintf("  A9: X->regen change intervals %d, with D_heavy %d (heavy harvest %d, fire %d, both %d) -- full table: 1,537 (1,223 / 315)\n",
+            nrow(xr), sum(!is.na(xr$D_heavy)), sum(!is.na(xr$D_harv_heavy)), sum(!is.na(xr$D_fire)), sum(!is.na(xr$D_harv_heavy) & !is.na(xr$D_fire))))
+
+cat(sprintf("\nB1 spec preview (placeholder continuous set: %s)\n", paste(COV_CONT, collapse = ", ")))
+cat(sprintf("  kept transitions %d | formulas with fire %d, pest %d, harvest light+heavy %d\n",
+            nrow(m), sum(m[, "fire_f"]), sum(m[, "pest_f"]), sum(m[, "harv_light"])))
 print(head(rhs_formulas(m), 3))
-sc <- make_scaling(iv); print(sc)
+print(sc)
 cat("\nALL CHECKS PASSED\n")

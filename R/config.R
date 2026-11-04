@@ -4,7 +4,7 @@
 # Rule: everything up to the INLA input lives in data/; everything produced by INLA and
 #       used afterwards lives in data-output/<RUN_TAG>/.
 # Sourced by: 02, 03, 03b, 03c, 03z, 04, 05, 07_redraw, 08, 09, 12, R/sensitivity/10, 11, R/tests/04c.
-# Later switches for the full-run sensitivities (TSD_SOURCE, prior strength, ...) will be added here.
+# Switches for the full-run sensitivities (TSD_SOURCE, prior strength, TSD form, MIN_EVENTS, ...) are in this file; see the end.
 # ==============================================================================
 RUN_TAG <- "main"   # run tags: noint (archived), inttest, main -- see PIPELINE_NOTES "Run tags"
 
@@ -44,3 +44,12 @@ USE_STATION_CODES <- TRUE  # TRUE (main): station_pe origine/perturb codes merge
 ALPHA_PRIOR <- 0.1   # PC prior strength on the Weibull shape alpha, pc.alphaw(ALPHA_PRIOR), in ALL fits (stage 1, stage 2, every
                      # imputation, redraw, script 11). 5 = INLA's default (checked 2026-10-26: identical fits) = sensitivity S4.
                      # Fits use one thread each (num.threads "1:1", T6).
+
+# ---- final pipeline switches (WP2 / B7, 2026-11-04; spec: docs/PIPELINE_FIX_PLAN_2026-11-03.md) ----------------------------
+# Sensitivity runs change only these lines plus RUN_TAG.
+WEIBULL_VARIANT  <- 0L        # Weibull variant 0: S(t) = exp(-e^eta t^alpha); beta = log hazard ratio (used from WP3, B1)
+COEF_PRIOR_SD    <- 5         # SD of the N(0, sd^2) prior on the coefficients (S21 = 2.5; S22 = 1/sqrt(0.001)); used from WP3 (B2)
+TSD_FORM         <- "log1p"   # TSD model columns: "log1p" = log(TSD in years + 1) (main); "linear" = TSD in decades (S24)
+MIN_EVENTS       <- 15L       # transition kept with >= this many state changes; also the per-term minimum for fire / pest / harvest
+                              # (light + heavy together) (S17 = 20, S23 = 10). Read by 04, 04b recount_events(), tests/04c.
+XREGEN_EXIT_RULE <- TRUE      # X->regen exit placed at the heavy disturbance (C2); FALSE only as a check; used from WP5

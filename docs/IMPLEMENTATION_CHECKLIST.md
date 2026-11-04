@@ -27,17 +27,17 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] Check: 0 NA climate; all other visits identical to the previous `climate_covariates.rds`; 04 plots/intervals/events unchanged; 5 plots plausible (7209002301 ~ 7209002302); 04x matches 04
 
 ## WP2 -- A2-A11, B7 (04, covariate_spec.R, config.R, 04b, tests/04c)   Commit: ______   Review: [ ]
-- [ ] A2 harvest: light + heavy only, never "any" (04, covariate_spec, recount_events, tests/04c)
-- [ ] A3 fire/pest rule unchanged (MIN_EVENTS from config)
-- [ ] A4 tsd_harv_light / tsd_harv_heavy
-- [ ] A5 TSD in years in 04; model columns via TSD_FORM (log1p main, linear = S24)
-- [ ] A6 per-level main + GDD x + TSD terms; 0-event level = main term only
-- [ ] A7 other_temperate->yellow_birch has harv_term "3level"
-- [ ] A8 no TSD cap (nothing to change; confirm)
-- [ ] A9 D_harv_heavy, D_fire, D_heavy (= earlier) in visit_intervals; C(i) edge-case count printed
-- [ ] A10 counts on end-visit flags (unchanged; confirm)
-- [ ] A11 n_undist in transition_set; no z_gdd_3 where n_undist == 0 and a disturbance term exists
-- [ ] B7 switches in config.R (WEIBULL_VARIANT, COEF_PRIOR_SD, TSD_FORM, MIN_EVENTS, XREGEN_EXIT_RULE); LOW_EVENTS_MAX <- MIN_EVENTS + 4L
+- [x] A2 harvest: light + heavy only, never "any" (04, covariate_spec, recount_events, tests/04c)  -- *69 of 69 harvest terms on scratch (17 + 21 + 31 -> "3level"); no `harv_any`/`tsd_harv` left in the WP2 files or 05a*
+- [x] A3 fire/pest rule unchanged (MIN_EVENTS from config)  -- *fire 14, pest 28 on scratch; transition_set counts and terms identical to the 7f5a1b6 baseline on the same table*
+- [x] A4 tsd_harv_light / tsd_harv_heavy  -- *04c: at most one harvest TSD non-zero per interval; 0 where the level flag is 0*
+- [x] A5 TSD in years in 04; model columns via TSD_FORM (log1p main, linear = S24)  -- *max TSD 174 y fire / 157 pest / 165 harvest; max log1p column 5.16 (plan ~5.2); linear = old decades x 10 exactly (checked vs baseline)*
+- [x] A6 per-level main + GDD x + TSD terms; 0-event level = main term only  -- *0-event level: only other_temperate->yellow_birch (heavy); GDD x / TSD heavy terms in 68 transitions, light and main in 69*
+- [x] A7 other_temperate->yellow_birch has harv_term "3level"  -- *3level on scratch; terms: z_gdd_3 + z_cmi_gs + z_soil_pc1 + harv_light + harv_heavy + gdd_x_harv_light + tsd_harv_light*
+- [x] A8 no TSD cap (nothing to change; confirm)  -- *confirmed, no TSD cap in 03a/03z/04*
+- [x] A9 D_harv_heavy, D_fire, D_heavy (= earlier) in visit_intervals; C(i) edge-case count printed  -- *1,535 X->regen intervals with D_heavy on scratch (harvest 1,221, fire 315) vs plan 1,537/1,223/315: the 2 missing are the X->regen events of dropped plots 7209002301/7209002302; dates all in (year_start, year_end]; C(i): 9 intervals, 0 of them X->regen*
+- [x] A10 counts on end-visit flags (unchanged; confirm)  -- *confirmed unchanged; recount_events passes on the final rows*
+- [x] A11 n_undist in transition_set; no z_gdd_3 where n_undist == 0 and a disturbance term exists  -- *only regen->sugar_maple (n_undist 0) loses z_gdd_3 on scratch*
+- [x] B7 switches in config.R (WEIBULL_VARIANT, COEF_PRIOR_SD, TSD_FORM, MIN_EVENTS, XREGEN_EXIT_RULE); LOW_EVENTS_MAX <- MIN_EVENTS + 4L  -- *switches in config.R; `LOW_EVENTS_MAX <- MIN_EVENTS + 4L` is done in WP7 (09), not here (user decision 2026-11-04)*
 - [ ] User ran on the Mac: 04 and tests/04c
 - [ ] Check (implementation step 2): only harvest terms (A2, A4, A6) and regen->sugar_maple's GDD main term (A11) change; transitions, events, fire and pest terms identical; 69 harvest terms; 1,537 X->regen intervals with D_heavy
 

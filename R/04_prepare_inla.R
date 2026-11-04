@@ -21,8 +21,7 @@ library(here)
 source(here::here("R", "config.R"))   # RUN_TAG, BUILD_DIR, TABLE_DIR
 dir.create(TABLE_DIR, recursive = TRUE, showWarnings = FALSE)
 
-MIN_EVENTS <- 15L     # transition kept only with >= this many observed state changes;
-                      # also the per-level minimum for fire / pest / harvest terms
+# MIN_EVENTS (transition kept with >= this many state changes; per-term minimum for fire / pest / harvest) is set in R/config.R (B7).
 
 # ==============================================================================
 # 0. LOAD
@@ -58,7 +57,7 @@ dt2[wj, W_j := i.W_j, on = "id_pe"]
 dt2[, t_abs := W_j + (year - year[1L]), by = id_pe]
 
 # ------------------------------------------------------------------------------
-# 2a. TIME SINCE DISTURBANCE (TSD) per disturbance type, in YEARS here (decades below)
+# 2a. TIME SINCE DISTURBANCE (TSD) per disturbance type, in YEARS (A5: the model columns are built in covariate_spec.R from TSD_FORM)
 # Since 2026-10-26 every flagged visit has a TSD from 03 (dated events: real; undated events: lower / upper / mid;
 # undated at the first visit: stand age or first-visit age). TSD_SOURCE is set in R/config.R: "mid" (main),
 # "lower" / "upper" (S11). The former W_j trick and the exclusion of plots with undatable disturbances are gone
@@ -66,13 +65,13 @@ dt2[, t_abs := W_j + (year - year[1L]), by = id_pe]
 # ------------------------------------------------------------------------------
 stopifnot("TSD_SOURCE in R/config.R must be mid, lower or upper" = TSD_SOURCE %in% c("mid", "lower", "upper"))
 sfx <- c(lower = "_imputed", upper = "_imputed_prev", mid = "_imputed_mid")[[TSD_SOURCE]]
-dt2[, `:=`(tsd_fire = get(paste0("tsf", sfx)), tsd_pest = get(paste0("sfp", sfx)),
-           tsd_harv = get(paste0("tsh", sfx)))]
-n_na <- dt2[(fire == 1L & is.na(tsd_fire)) | (pest == 1L & is.na(tsd_pest)) | (harv > 0L & is.na(tsd_harv)), .N]
+dt2[, `:=`(tsd_fire_y = get(paste0("tsf", sfx)), tsd_pest_y = get(paste0("sfp", sfx)),
+           tsd_harv_y = get(paste0("tsh", sfx)))]
+n_na <- dt2[(fire == 1L & is.na(tsd_fire_y)) | (pest == 1L & is.na(tsd_pest_y)) | (harv > 0L & is.na(tsd_harv_y)), .N]
 cat(sprintf("\nTSD source '%s' (columns *%s); flagged visits without TSD: %d\n", TSD_SOURCE, sfx, n_na))
 if (n_na > 0) stop("flagged visits without a TSD -- 03 should have dated every flagged visit; inspect")
 
-cov_cols <- c(setdiff(names(dt), c("id_pe", "no_mes", "state", "year")), "tsd_fire", "tsd_pest", "tsd_harv")
+cov_cols <- c(setdiff(names(dt), c("id_pe", "no_mes", "state", "year")), "tsd_fire_y", "tsd_pest_y", "tsd_harv_y")
 
 st <- dt2[, .SD[-.N],  by = id_pe]     # start visits: all but the last of each plot
 en <- dt2[, .SD[-1L],  by = id_pe]     # end visits:   all but the first of each plot
@@ -90,11 +89,39 @@ iv <- data.table(
 iv[, is_change := state_start != state_end]
 iv[, `:=`(fire_start = st$fire, harv_start = st$harv, pest_start = st$pest)]
 iv <- cbind(iv, en[, ..cov_cols])
-# TSD in DECADES, raw (not centred, not capped); structural zero where the flag is 0
-iv[, `:=`(tsd_fire = fifelse(fire == 1L, tsd_fire / 10, 0),
-          tsd_pest = fifelse(pest == 1L, tsd_pest / 10, 0),
-          tsd_harv = fifelse(harv >  0L, tsd_harv / 10, 0))]
-stopifnot(!anyNA(iv[, .(tsd_fire, tsd_pest, tsd_harv)]), all(iv[, .(tsd_fire, tsd_pest, tsd_harv)] >= 0))
+# TSD in YEARS, raw (not centred, not capped: A8); structural zero where the flag is 0 (A5)
+iv[, `:=`(tsd_fire_y = fifelse(fire == 1L, tsd_fire_y, 0),
+          tsd_pest_y = fifelse(pest == 1L, tsd_pest_y, 0),
+          tsd_harv_y = fifelse(harv >  0L, tsd_harv_y, 0))]
+stopifnot(!anyNA(iv[, .(tsd_fire_y, tsd_pest_y, tsd_harv_y)]), all(iv[, .(tsd_fire_y, tsd_pest_y, tsd_harv_y)] >= 0))
+cat(sprintf("TSD (years, end-visit value of flagged intervals) max: fire %.1f, pest %.1f, harvest %.1f (no cap)\n",
+            max(iv$tsd_fire_y), max(iv$tsd_pest_y), max(iv$tsd_harv_y)))
+
+# A9 (2026-11-04): date of a HEAVY disturbance inside the interval (input for C2, WP5). TSD follows TSD_SOURCE, so S11 moves the date too.
+#   D_harv_heavy = year_end - tsd_harv_y  if the end visit shows heavy harvest and its date lies inside the interval
+#   D_fire       = year_end - tsd_fire_y  if the end visit shows fire and its date lies inside the interval
+#   D_heavy      = the earlier of the two (C2 decision)
+iv[, `:=`(D_harv_heavy = fifelse(harv == 2L & tsd_harv_y < year_end - year_start, year_end - tsd_harv_y, NA_real_),
+          D_fire       = fifelse(fire == 1L & tsd_fire_y < year_end - year_start, year_end - tsd_fire_y, NA_real_))]
+iv[, D_heavy := pmin(D_harv_heavy, D_fire, na.rm = TRUE)]
+stopifnot("A9: a date outside (year_start, year_end]" =
+            all(iv[!is.na(D_heavy), D_heavy > year_start & D_heavy <= year_end]))
+xr <- iv[is_change == TRUE & state_end == "regen"]
+cat(sprintf("A9: X->regen change intervals %d | with a heavy-disturbance date (D_heavy) %d (heavy harvest %d, fire %d, both %d; expected 1,537 / 1,223 / 315 on the full table)\n",
+            nrow(xr), sum(!is.na(xr$D_heavy)), sum(!is.na(xr$D_harv_heavy)), sum(!is.na(xr$D_fire)),
+            sum(!is.na(xr$D_harv_heavy) & !is.na(xr$D_fire))))
+# A9 edge case C(i), logged not solved: a heavy harvest followed by a light one inside the same interval shows only the light one at the
+# end visit, so D_harv_heavy is NA. Count the intervals with harv_start != 2, light harvest at the end visit and a (non-dropped) heavy harvest
+# record in data/build/disturbance_events.rds that belongs to the interval: a DATED record with year in (year_start, year_end], or an UNDATED
+# record first seen at the end visit (first_no_mes == visit_end; its imputed date then lies inside the interval). User decision 2026-11-04.
+hv <- as.data.table(readRDS(file.path(BUILD_DIR, "disturbance_events.rds"))$events)[type == "harv" & level == 2L & !(dropped %in% TRUE),
+                                                                                    .(id_pe, yr, first_no_mes)]
+ci <- merge(iv[harv_start != 2L & harv == 1L, .(id_pe, interval, visit_end, year_start, year_end, is_change, state_end)],
+            hv, by = "id_pe", allow.cartesian = TRUE)
+ci <- unique(ci[(!is.na(yr) & yr > year_start & yr <= year_end) | (is.na(yr) & first_no_mes == visit_end),
+                .(id_pe, interval, is_change, state_end)])
+cat(sprintf("A9 C(i) edge case: %d intervals with a missed heavy harvest (light at the end visit; dated heavy record inside the interval or undated heavy record first seen at the end visit); %d of them are X->regen change intervals (the exit rule would miss them)\n",
+            nrow(ci), ci[is_change == TRUE & state_end == "regen", .N]))
 
 # A1 (2026-11-04): no NA climate / soil covariate may reach INLA (it would be read as 0 = the mean).
 #   iv        : end-visit values of every interval
@@ -126,10 +153,11 @@ saveRDS(plot_info, file.path(TABLE_DIR, "plot_info.rds"))
 # flags (the *_start counts are reported alongside for comparison).
 #   transition kept        : n_events >= MIN_EVENTS
 #   fire / pest term       : >= MIN_EVENTS events with the flag = 1
-#   harvest (0 / 1 light / 2 heavy):
-#       "3level" if none, light and heavy each have >= MIN_EVENTS events;
-#       else "any" (any harvest vs none) if none >= MIN_EVENTS and light+heavy >= MIN_EVENTS;
-#       else "none" (harvest term dropped)
+#   harvest (0 / 1 light / 2 heavy), A2 (2026-11-04): "3level" if light + heavy >= MIN_EVENTS events (the no-harvest reference has
+#       no minimum); else "none" (no harvest term). "3level" = light and heavy each vs none; there is no "any" level.
+#       Level terms: main + GDD x + TSD for a level with events; a level with 0 events keeps its main term only (A6, covariate_spec.R).
+#   n_undist (A11): events with none of the transition's disturbance terms (fire = 0 if it has a fire term, pest = 0 if a pest term,
+#       harvest = 0 if a harvest term). With 0 the GDD main term is dropped (covariate_spec.R term_mask()).
 # ==============================================================================
 states <- sort(unique(dt$state))
 ev <- iv[is_change == TRUE]
@@ -148,11 +176,12 @@ for (cc in num_cols) set(tr, which(is.na(tr[[cc]])), cc, 0L)
 tr[, kept := n_events >= MIN_EVENTS]
 tr[, fire_term := kept & n_fire >= MIN_EVENTS]
 tr[, pest_term := kept & n_pest >= MIN_EVENTS]
-tr[, harv_term := fcase(
-  !kept, "none",
-  n_harv0 >= MIN_EVENTS & n_harv1 >= MIN_EVENTS & n_harv2 >= MIN_EVENTS, "3level",
-  n_harv0 >= MIN_EVENTS & (n_harv1 + n_harv2) >= MIN_EVENTS, "any",
-  default = "none")]
+tr[, harv_term := fcase(!kept, "none", (n_harv1 + n_harv2) >= MIN_EVENTS, "3level", default = "none")]
+# A11: n_undist, computed AFTER the term set is known (end-visit flags of the event intervals, as for all counts: A10)
+und <- merge(ev[, .(from = state_start, to = state_end, fire, pest, harv)], tr[, .(from, to, fire_term, pest_term, harv_term)], by = c("from", "to"))
+und <- und[, .(n_undist = sum(!((fire_term & fire %in% 1L) | (pest_term & pest %in% 1L) | (harv_term == "3level" & harv %in% 1:2)))),
+           by = .(from, to)]
+tr <- merge(tr, und, by = c("from", "to"), all.x = TRUE); tr[is.na(n_undist), n_undist := 0L]
 setorder(tr, -n_events)
 
 cat(sprintf("\nTransitions: %d possible | %d observed | %d kept (>= %d events)\n",
@@ -164,6 +193,10 @@ cat(sprintf("Events in kept transitions: %d | in dropped: %d (%.1f%%), touching 
 cat("Covariate terms among kept transitions:\n")
 print(tr[kept == TRUE, .(n_kept = .N, fire = sum(fire_term), pest = sum(pest_term)), ])
 print(tr[kept == TRUE, .N, by = harv_term])
+cat(sprintf("Transitions with a harvest term (light + heavy vs none): %d\n", tr[kept == TRUE, sum(harv_term == "3level")]))
+cat("A11: kept transitions with n_undist == 0 and a disturbance term (GDD main term dropped):\n")
+print(tr[kept == TRUE & n_undist == 0L & (fire_term | pest_term | harv_term == "3level"),
+         .(from, to, n_events, n_undist, n_harv0, n_harv1, n_harv2, fire_term, pest_term)])
 
 # reachability from regen through kept transitions
 reach <- "regen"; repeat { nx <- unique(c(reach, tr[kept == TRUE & from %in% reach, to])); if (length(nx) == length(reach)) break; reach <- nx }
