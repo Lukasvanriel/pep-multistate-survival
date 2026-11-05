@@ -102,3 +102,4 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] C4 Methods text (exit rule incl. undated heavy disturbances and "fire"; exits drawn; limitations list in the plan)
 - [ ] C5 simulation rerun with corrected weights (copy of the simulation code inside this project)
 - [ ] Refit script for S21, S22, S24 (before those sensitivities)
+- [ ] After WP6: investigate the 121 plots (2.4%; fire 20, pest 72 = 7%, harvest 29) whose first-visit disturbance flag is off at the interval-1 end visit (`wp4_C1_check.R real`, step 8). Cause unknown (PEP recording vs TSD build). If it is a build gap, tables and run must be redone.
