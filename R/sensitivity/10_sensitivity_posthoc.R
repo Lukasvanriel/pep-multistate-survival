@@ -1,8 +1,8 @@
 # ==============================================================================
 # 10_sensitivity_posthoc.R   (no INLA; run from the project root: Rscript R/sensitivity/10_sensitivity_posthoc.R)   needs 08_final_pool.R and 09_hazard_ratios.R run first
 # Purpose: how much do the main results depend on analysis choices that can be changed WITHOUT new INLA fits. Main analysis = first 30 valid fits per transition (pooled_int_final.csv).
-#   S1  Interactions with enough disturbed events. Main analysis keeps every GDD x disturbance interaction whose disturbance term exists (>= 15 disturbed events); interactions with 15-19
-#       disturbed events are lower confidence (imputation attenuates interactions toward 0). Compare: all interactions vs those with >= MIN_EVENTS_S1 (20) disturbed events -
+#   S1  Interactions with enough disturbed events. Main analysis keeps every GDD x disturbance interaction whose level term exists (A6: >= 1 event of that level; n_dist = disturbed events of
+#       that level, per level, from 09); interactions with n_dist below MIN_EVENTS_S1 (20) are lower confidence (imputation attenuates interactions toward 0; "<15" and "15-19" in `low_events`). Compare: all interactions vs those with >= MIN_EVENTS_S1 disturbed events -
 #       number, share with CI excluding 1, sign agreement and the median ratio-of-HR. Answers: do conclusions about climate x disturbance rest on the sparse interactions?
 #   S2  Drop fits with a very small alpha SD RELATIVE to their own transition (alpha-SD ratio < REL_RATIO_S2 = 0.5 x the median ratio of the transition's used fits; they pass the frozen screen but are
 #       suspicious; absolute ratios are naturally < 1 in sparse transitions, so a fixed cut-off would drop a third of all fits). Re-pool every transition without them; shift in SE units per parameter.
@@ -13,11 +13,12 @@
 suppressPackageStartupMessages(library(data.table)); options(width = 200)
 source(here::here("R", "config.R"))   # RUN_TAG, FIT_DIR, RESULTS_DIR, SENS_DIR
 dir.create(SENS_DIR, recursive = TRUE, showWarnings = FALSE)
-MIN_EVENTS_S1 <- 20L; REL_RATIO_S2 <- 0.5; MIN_FITS_S2 <- 20L
+MIN_EVENTS_S1 <- if (exists("MIN_EVENTS_S1")) MIN_EVENTS_S1 else 20L   # config.R line MIN_EVENTS_S1 takes precedence once added (WP7 D7)
+REL_RATIO_S2 <- 0.5; MIN_FITS_S2 <- 20L
 OUT_DIR <- FIT_DIR; SD_MIN <- 1e-3
 ex <- parse(file.path("R", "05a_fit_funs.R"))
 for (e in ex) if (is.call(e) && identical(e[[1]], as.name("<-")) && as.character(e[[2]])[1] %in% c("pool_rubin", "flag_fits", "pool_all")) eval(e)
-rf <- file.path(OUT_DIR, sprintf(c("mi_raw_%s.csv", "mi_raw_redraw_%s.csv", "mi_raw_sweepfull_%s.csv"), RUN_TAG)); raw <- rbindlist(lapply(rf[file.exists(rf)], fread), fill = TRUE)   # sweepfull: int run only
+rf <- file.path(OUT_DIR, sprintf(c("mi_raw_%s.csv", "mi_raw_redraw_%s.csv"), RUN_TAG)); raw <- rbindlist(lapply(rf[file.exists(rf)], fread), fill = TRUE)
 v <- fread(file.path(RESULTS_DIR, sprintf("fit_validity_%s.csv", RUN_TAG))); pf <- fread(file.path(RESULTS_DIR, sprintf("pooled_%s_final.csv", RUN_TAG)))
 key <- function(d) d[, .(k, label, parameter, est = pooled_est, se, m_eff)]
 base <- key(pf)
@@ -43,12 +44,13 @@ print(sens[, .(rows = as.numeric(.N), gt0.5 = as.numeric(sum(abs(shift_se) > 0.5
 
 # ---- S1: interactions with enough disturbed events ---------------------------------------------------------------------------------------------------------------
 hr <- fread(file.path(RESULTS_DIR, sprintf("hazard_ratios_%s.csv", RUN_TAG)))[grepl("_gdd_interaction$", contrast)]
+stopifnot("low_events must hold NA, not empty strings (09 writes na = \"NA\")" = !any(hr$low_events %in% ""))
 hr[, `:=`(excl1 = hr_lo > 1 | hr_hi < 1, subset = n_dist >= MIN_EVENTS_S1)]
-fwrite(hr[, .(label, contrast, dist, n_events, n_dist, subset, low_events, hr, hr_lo, hr_hi, p, fmi, alpha_cov_low_share)][order(n_dist)], file.path(SENS_DIR, sprintf("sens_interactions_%s.csv", RUN_TAG)))
+fwrite(hr[, .(label, contrast, dist, n_events, n_dist, subset, low_events, hr, hr_lo, hr_hi, p, fmi)][order(n_dist)], file.path(SENS_DIR, sprintf("sens_interactions_%s.csv", RUN_TAG)))
 summ <- function(d) d[, .(n = .N, ci_excl_1 = sum(excl1), share = round(mean(excl1), 3), hr_lt_1 = sum(hr < 1), median_hr = round(median(hr), 3), median_log_hr = round(median(log_hr), 3))]
-cat(sprintf("\nS1: GDD x disturbance interactions (ratio of the +1 SD GDD hazard ratio, disturbed vs undisturbed): %d in the main analysis; %d with >= %d disturbed events; %d with %d-%d (lower confidence)\n",
-            nrow(hr), hr[subset == TRUE, .N], MIN_EVENTS_S1, hr[low_events == TRUE, .N], 15L, MIN_EVENTS_S1 - 1L))
-print(rbind(data.table(set = "all", summ(hr)), data.table(set = sprintf(">= %d disturbed events", MIN_EVENTS_S1), summ(hr[subset == TRUE])), data.table(set = sprintf("15-%d (lower confidence)", MIN_EVENTS_S1 - 1L), summ(hr[subset == FALSE]))))
+cat(sprintf("\nS1: GDD x disturbance interactions (ratio of the +1 SD GDD hazard ratio, disturbed vs undisturbed): %d in the main analysis; %d with >= %d disturbed events of the level; %d with fewer (lower confidence: %d labelled <%d, %d labelled %d-%d)\n",
+            nrow(hr), hr[subset == TRUE, .N], MIN_EVENTS_S1, hr[subset == FALSE, .N], hr[low_events %in% sprintf("<%d", MIN_EVENTS), .N], MIN_EVENTS, hr[!low_events %in% sprintf("<%d", MIN_EVENTS) & !is.na(low_events), .N], MIN_EVENTS, MIN_EVENTS + 4L))
+print(rbind(data.table(set = "all", summ(hr)), data.table(set = sprintf(">= %d disturbed events", MIN_EVENTS_S1), summ(hr[subset == TRUE])), data.table(set = sprintf("< %d (lower confidence)", MIN_EVENTS_S1), summ(hr[subset == FALSE]))))
 cat("\nBy disturbance type, share of interactions with CI excluding 1: all vs >= threshold:\n")
 print(hr[, .(n_all = .N, excl_all = sum(excl1), n_sub = sum(subset), excl_sub = sum(excl1 & subset), median_hr_all = round(median(hr), 2), median_hr_sub = round(median(hr[subset]), 2)), by = dist])
 cat("\nInteractions with < ", MIN_EVENTS_S1, " disturbed events (the ones dropped in S1):\n"); print(hr[subset == FALSE][order(n_dist), .(label, contrast, n_dist, hr = round(hr, 2), lo = round(hr_lo, 2), hi = round(hr_hi, 2), p = signif(p, 2))])

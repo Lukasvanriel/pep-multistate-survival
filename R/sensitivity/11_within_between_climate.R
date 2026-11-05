@@ -15,16 +15,17 @@
 #   * within-plot variation is small (GDD 4.6%, CMI 2.6% of the variance), so beta_wth has wide intervals; and it reflects decadal fluctuation
 #     (incl. the warming trend), not long-term climate, so a smaller beta_wth does NOT by itself prove confounding (slow responses / lags).
 #   * GDD x disturbance interactions are kept as in the main model (z_gdd_3 x flag, total GDD); soil is unchanged (no within-plot variance).
-#   * the imputations (P1 entries, P2 exits) are REUSED from the main run (extras_int_mXX.rds): they were generated under the main model.
+#   * (WP7, D7) transitions without a GDD main term (A11, z_gdd_3 not in the model) get neither gdd_btw nor gdd_wth (nor d_gdd); the CMI split stays.
+#   * the imputations (P1 entries, P2 exits) are REUSED from the main run (extras_<tag>_mXX.rds): they were generated under the main model.
 #     Events and their intervals are observed, only their timing inside the bracket is imputed, so this mainly affects timing, not which
 #     plots changed. State this as a limitation (sensitivity analysis, not a full re-imputation).
 #
 # WHAT IT DOES
 #   0. Rebuilds the rows of imputation CHECK_M from the stored P1/P2 and refits CHECK_LABELS with the ORIGINAL formula: estimates must
-#      reproduce mi_raw_int.csv (stops otherwise). This verifies both the row rebuild and the INLA call.
-#   1. Pass 1: refits every transition on its 30 USED imputations (fit_validity_int.csv, used == TRUE) with the within/between formula.
-#      Same INLA call as model_fitting.R (weibullsurv variant 1, adaptive, grid, VB off, config TRUE), plus two linear combinations
-#      d_gdd = gdd_wth - gdd_btw and d_cmi = cmi_wth - cmi_btw (derived only; they do not change the fit).
+#      reproduce mi_raw_<tag>.csv (stops otherwise). This verifies both the row rebuild and the INLA call.
+#   1. Pass 1: refits every transition on its 30 USED imputations (fit_validity_<tag>.csv, used == TRUE) with the within/between formula.
+#      Same INLA call as fit_inla_models_pc in 05a (weibullsurv variant WEIBULL_VARIANT = 0, control.fixed N(0, COEF_PRIOR_SD^2) with a flat intercept, adaptive, grid, VB off, config TRUE), plus linear combinations
+#      d_gdd = gdd_wth - gdd_btw (where GDD is in the model) and d_cmi = cmi_wth - cmi_btw (derived only; they do not change the fit). Estimates are log hazard ratios: HR = exp(beta); the intercept stays on INLA's decade scale.
 #   2. Frozen screen (same rules as 08_final_pool.R): no error/NA; alpha-SD ratio >= 0.1; |intercept z| <= 4, reference = median intercept and
 #      median intercept SD of this run's ratio-passing pass-1 fits (frozen after pass 1, saved).
 #   3. Pass 2: a transition with < 30 valid fits gets replacement fits from the other stored imputations, in increasing m.
@@ -69,7 +70,8 @@ print(iv[, .(gdd_btw_sd = sd(gdd_btw), gdd_wth_sd = sd(gdd_wth), cmi_btw_sd = sd
 
 m0 <- inp$mask
 new_cont <- c("gdd_btw", "gdd_wth", "cmi_btw", "cmi_wth")
-mask_wb <- cbind(matrix(TRUE, nrow(m0), 4, dimnames = list(rownames(m0), new_cont)),
+has_g <- m0[, "z_gdd_3"]                                       # A11: FALSE where z_gdd_3 is not in the model -> no gdd_btw / gdd_wth there
+mask_wb <- cbind(gdd_btw = has_g, gdd_wth = has_g, cmi_btw = TRUE, cmi_wth = TRUE,
                  m0[, setdiff(colnames(m0), c("z_gdd_3", "z_cmi_gs")), drop = FALSE])
 inp_wb <- inp
 inp_wb$iv <- iv
@@ -95,36 +97,38 @@ rebuild_rows <- function(m, x = inp_wb) {
   rows
 }
 
-# ---- INLA call: identical settings to the main fits (fit_inla_models_pc in 05a, exact = TRUE: alpha prior pc.alphaw(ALPHA_PRIOR), one thread),
-# optional derived linear combinations ---------------------------
-fit_one <- function(d, rhs, with_lc = FALSE) {
+# ---- INLA call: identical settings to the main fits (fit_inla_models_pc in 05a, exact = TRUE: variant WEIBULL_VARIANT, alpha prior pc.alphaw(ALPHA_PRIOR),
+# control.fixed N(0, COEF_PRIOR_SD^2) with a flat intercept, one thread), optional derived linear combinations ---------------------------
+lc_names <- function(tms, with_lc) if (!with_lc) character(0) else c(if (all(c("gdd_btw", "gdd_wth") %in% tms)) "d_gdd", "d_cmi")
+fit_one <- function(d, rhs, with_lc = FALSE, tms = character(0)) {
   f <- as.formula(sprintf("inla.surv(time = Tstop, event = status, truncation = truncation) ~ %s", rhs))
-  lc <- NULL
-  if (with_lc) { l1 <- inla.make.lincomb(gdd_wth = 1, gdd_btw = -1); names(l1) <- "d_gdd"
-                 l2 <- inla.make.lincomb(cmi_wth = 1, cmi_btw = -1); names(l2) <- "d_cmi"; lc <- c(l1, l2) }
+  lc <- NULL; ln <- lc_names(tms, with_lc)
+  if (length(ln)) { l <- list(); if ("d_gdd" %in% ln) { l1 <- inla.make.lincomb(gdd_wth = 1, gdd_btw = -1); names(l1) <- "d_gdd"; l <- c(l, l1) }
+                    l2 <- inla.make.lincomb(cmi_wth = 1, cmi_btw = -1); names(l2) <- "d_cmi"; lc <- c(l, l2) }
   tryCatch(inla(f, family = "weibullsurv", data = d, lincomb = lc,
-                control.family = list(variant = 1, hyper = list(alpha = list(prior = "pc.alphaw", param = ALPHA_PRIOR))),
+                control.family = list(variant = WEIBULL_VARIANT, hyper = list(alpha = list(prior = "pc.alphaw", param = ALPHA_PRIOR))),
+                control.fixed = list(mean = 0, prec = 1 / COEF_PRIOR_SD^2, mean.intercept = 0, prec.intercept = 0),
                 control.compute = list(config = TRUE),
                 control.inla = list(strategy = "adaptive", int.strategy = "grid", control.vb = list(enable = FALSE)),
                 num.threads = "1:1"),
            error = function(e) list(error = conditionMessage(e)))
 }
 tidy_one <- function(mod, tms, lb, m, n_ev, with_lc) {
-  pars <- c("alpha", "(Intercept)", tms, if (with_lc) c("d_gdd", "d_cmi"))
+  pars <- c("alpha", "(Intercept)", tms, lc_names(tms, with_lc))
   if (!is.null(mod$error)) return(data.table(label = lb, m = m, parameter = pars, est = NA_real_, sd = NA_real_, fit_error = TRUE, n_events = n_ev, error_msg = mod$error[1]))
   fx <- mod$summary.fixed; hy <- mod$summary.hyperpar; lcs <- mod$summary.lincomb.derived
   g <- function(tab, nm, col) if (!is.null(tab) && nm %in% rownames(tab)) tab[nm, col] else NA_real_
-  est <- c(g(hy, ALPHA_NAME, "mean"), g(fx, "(Intercept)", "mean") - LOG_TIME_SCALE, vapply(tms, function(t) g(fx, t, "mean"), 0),
-           if (with_lc) c(g(lcs, "d_gdd", "mean"), g(lcs, "d_cmi", "mean")))
+  est <- c(g(hy, ALPHA_NAME, "mean"), g(fx, "(Intercept)", "mean"), vapply(tms, function(t) g(fx, t, "mean"), 0),   # intercept on INLA's decade scale (variant 0, B3)
+           vapply(lc_names(tms, with_lc), function(t) g(lcs, t, "mean"), 0))
   sdv <- c(g(hy, ALPHA_NAME, "sd"), g(fx, "(Intercept)", "sd"), vapply(tms, function(t) g(fx, t, "sd"), 0),
-           if (with_lc) c(g(lcs, "d_gdd", "sd"), g(lcs, "d_cmi", "sd")))
+           vapply(lc_names(tms, with_lc), function(t) g(lcs, t, "sd"), 0))
   data.table(label = lb, m = m, parameter = pars, est = est, sd = sdv, fit_error = FALSE, n_events = n_ev, error_msg = NA_character_)
 }
 fit_labels <- function(m, labels, mask, rhs, with_lc) {
   rows <- rebuild_rows(m); sp <- split(rows, by = "label", keep.by = TRUE); rm(rows)
   rbindlist(lapply(labels, function(lb) {
     tms <- terms_of(mask, lb); d <- as.data.frame(sp[[lb]][, c("status", "Tstop", "truncation", tms), with = FALSE])
-    tidy_one(fit_one(d, rhs[[lb]], with_lc), tms, lb, m, sum(d$status == 1L), with_lc)
+    tidy_one(fit_one(d, rhs[[lb]], with_lc, tms), tms, lb, m, sum(d$status == 1L), with_lc)
   }))
 }
 
@@ -207,12 +211,11 @@ w <- dcast(pooled[parameter %in% c("alpha", new_cont, "d_gdd", "d_cmi")], label 
 main <- fread(file.path(RESULTS_DIR, sprintf("pooled_%s_final.csv", RUN_TAG)))[parameter %in% c("z_gdd_3", "z_cmi_gs"), .(label, parameter, est_main = pooled_est)]
 main <- dcast(main, label ~ parameter, value.var = "est_main")
 w <- merge(w, main, by = "label")
-al <- w$pooled_est_alpha
 for (v in c("gdd", "cmi")) {
   b <- paste0(v, "_btw"); wi <- paste0(v, "_wth"); d <- paste0("d_", v)
-  w[, (paste0("hr_", b)) := exp(al * get(paste0("pooled_est_", b)))]
-  w[, (paste0("hr_", wi)) := exp(al * get(paste0("pooled_est_", wi)))]
-  w[, (paste0("hr_", wi, "_lo")) := exp(al * get(paste0("ci_lo_", wi)))]; w[, (paste0("hr_", wi, "_hi")) := exp(al * get(paste0("ci_hi_", wi)))]
+  w[, (paste0("hr_", b)) := exp(get(paste0("pooled_est_", b)))]                                  # variant 0: HR = exp(beta)
+  w[, (paste0("hr_", wi)) := exp(get(paste0("pooled_est_", wi)))]
+  w[, (paste0("hr_", wi, "_lo")) := exp(get(paste0("ci_lo_", wi)))]; w[, (paste0("hr_", wi, "_hi")) := exp(get(paste0("ci_hi_", wi)))]
   w[, (paste0(v, "_btw_sig")) := get(paste0("ci_lo_", b)) > 0 | get(paste0("ci_hi_", b)) < 0]
   w[, (paste0(v, "_wth_sig")) := get(paste0("ci_lo_", wi)) > 0 | get(paste0("ci_hi_", wi)) < 0]
   w[, (paste0(v, "_same_sign")) := sign(get(paste0("pooled_est_", b))) == sign(get(paste0("pooled_est_", wi)))]
@@ -221,7 +224,7 @@ for (v in c("gdd", "cmi")) {
 w <- merge(w, inp$td[, .(label, n_events)], by = "label"); setorder(w, -n_events)
 fwrite(w, file.path(OUT_DIR, "compare_within_between_wb.csv"))
 
-cat("\n=== Within vs between, per transition (per 1 SD of the ORIGINAL covariate; HR = exp(alpha * beta)) ===\n")
+cat("\n=== Within vs between, per transition (per 1 SD of the ORIGINAL covariate; HR = exp(beta); NA GDD rows = transitions without a GDD main term) ===\n")
 for (v in c("gdd", "cmi")) {
   cat(sprintf("\n-- %s --\n", toupper(v)))
   print(w[, .(label, n_events, hr_btw = round(get(paste0("hr_", v, "_btw")), 2), hr_wth = round(get(paste0("hr_", v, "_wth")), 2),
@@ -236,6 +239,6 @@ for (v in c("gdd", "cmi")) {
   cat(sprintf("Across all transitions, weighted slope of within on between = %.2f (SE %.2f); 1 = same effect over time as across space, 0 = no temporal effect.\n",
               cs[2, 1], cs[2, 2]))
   cat(sprintf("Check: between-plot estimate vs main-run total estimate, median |difference| = %.3f\n",
-              median(abs(w[[paste0("pooled_est_", v, "_btw")]] - w[[if (v == "gdd") "z_gdd_3" else "z_cmi_gs"]]))))
+              median(abs(w[[paste0("pooled_est_", v, "_btw")]] - w[[if (v == "gdd") "z_gdd_3" else "z_cmi_gs"]]), na.rm = TRUE)))
 }
 cat("\nOutputs in", OUT_DIR, "\n")
