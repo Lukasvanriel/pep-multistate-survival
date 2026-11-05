@@ -20,7 +20,7 @@ Template:
 - Not committed (left untracked on purpose): data-output/simulation/, data-output/main/ (non-ignored parts), Manuscript/,
   Present/, "Claude outputs/", docs/*.html and the hidden docs/.*backup* files.
 
-## WP1 -- A1 (2026-11-04) -- CODE DONE, RUN CHECKS PENDING
+## WP1 -- A1 (2026-11-04) -- DONE (run checks passed, see "WP1 -- A1 final entry" at the end of this log)
 - Commit: "WP1: A1 (code; run checks pending)" (hash: see `git log`; the final entry below fills in the run results and the hash).
 - Files / functions changed:
   - `R/03c_build_climate_covariates.R`: step 4 is plot-aware (`need` = every plot-year the visit windows require, `miss` = `need` minus the
@@ -362,3 +362,32 @@ Template:
   | First-visit flags (plot_info) | none-flag plots 6,330 | 6,330; NA counts all 0 |
 - Not checked by these runs: `n_undist` is not compared with any baseline (the old table has no such column); 04x was not part of this output.
 - Open: `05a_fit_funs.R` header (line 8) still says "(91)" kept transitions; the table has 90. Comment only, not changed.
+
+## WP1 -- A1 final entry (2026-11-04, after the Mac run)
+- Commits: 7f5a1b6 (code), e4e1f41 (review fixes), and the commit that ticks the checklist and adds this entry.
+- Run on the Mac by the user: 03c (rerun output seen) -> `wp1_A1_check.R` (before and after 03z) -> 03z -> 04 -> 04x. Not seen by me: the log of the FIRST 03c run (the
+  extraction itself) and 03z's own printed output (its NA guard); the evidence for both is indirect (below).
+- Results against the A1 Check items:
+
+| A1 Check item | Result | Evidence |
+|---|---|---|
+| 0 NA climate | PASS | 03c: 0 NA in the 30 averaged columns of all 718,015 plot-years used / of the 47,696 visits; check script: 0 NA; part B: 0 NA in gdd_3, cmi_gs, soil_pc1 of the combined table (old: 14 visits) |
+| Extraction of the missing plot-years | PASS (indirect) | Rerun of 03c: 0 plot-years missing; checkpoint 11,469 -> 11,474 plots and 717,835 -> 718,015 plot-years (+180 = 5 plots x 36 years) |
+| Every window full | PASS | 03c guard and check script: all 47,696 visits n_years_used == win_end - win_start + 1 (8 y: 949, 9 y: 508, 10 y: 46,239; the 1,457 truncated windows are the known 1960/2022 edge cases) |
+| All other visits identical to the previous file | PASS | 47,696 vs 47,696 visits; 14 visits differ, all 14 in the 5 plots, 0 outside (exact, all columns) |
+| Combined table | PASS | same rows and columns; 0 differences outside the 5 plots; in the 5 plots only climate columns change |
+| 04 plots / intervals / events unchanged | PASS | 04: 11,286 plots / 36,251 intervals / 8,770 changes. Read-only comparison of data/tables/final with data/tables/main (Python): same 36,251 interval keys; gdd_3 and cmi_gs NA 9 -> 0, exactly the 9 intervals named in the plan; no value differs elsewhere; soil_pc1, state_start/end, t_start/t_end, W_j identical; transition_set: kept, n_events, n_fire, n_pest, n_harv0/1/2, fire_term, pest_term identical in all 156 rows |
+| 04x matches 04 | PASS | 04x: "final plots / intervals / state changes = 04's table (11286 / 36251 / 8770): OK". The 5 plots are NOT removed at the 03z step (11,333 plots and 47,696 visits before and after), which confirms the plan's A1 point 6 explanation was wrong (logged above) |
+| 5 plots plausible | PASS under the agreed rule, with a caveat | 0 of 14 neighbour FLAGS and 0 of 3 pair FLAGS (bounds = 99th percentile of existing plots, same window) |
+
+- Caveats and things NOT shown by the run (stated, not resolved):
+  - Pair 7209002301 / 7209002302 are NOT near-identical: gdd_3 differs by 69.2 / 66.0 / 68.6 (1972 / 1979 / 1989; about 4.7%), with the same sign every year (01 higher). That is
+    above the 95th percentile (about 49) of existing nearest-neighbour pairs <= 0.6 km and below the 99th (86.1 / 82.8 / 84.3), so it passes the agreed rule only. cmi_gs differs by
+    0.65-0.78 (bound 3.1-5.1). The plots sit in adjacent 2-km cells and the three nearest checkpoint plots themselves span 1399-1490 GDD, which fits a steep local gradient, but
+    the extraction of these two cells was not checked independently (e.g. against the raster).
+  - 7209002301 lies 41.9-44.0 GDD above the median of its 3 nearest checkpoint plots (2.3-3.6 km away) and 7209002302 24.1-25.2; all within the bounds (about 142-149).
+  - The negative paths of the new guards (the `stop()` branches in 03c, 03z, 04) have never been triggered by real data; only the passing path ran.
+  - The check script prints a harmless data.table warning ("Both 'mm' and '..mm' exist in calling scope"). Renaming `mm` was not done (no code change without permission).
+- Open issue closed: A1.5 on the `plot_info` first-visit columns. WP4 added it (04 lines 155-163, `stopifnot(!anyNA(plot_info[, ..fvc]))` and coding checks); the run printed
+  fv_gdd_3 = fv_cmi_gs = fv_soil_pc1 = 0 NA.
+- Still open from WP1: `download_zip()` does not delete partial zips (see the WP1 section); tests 22 / 23 / 08f / 08g need an explicit main-run source tag for WP3 / WP5.

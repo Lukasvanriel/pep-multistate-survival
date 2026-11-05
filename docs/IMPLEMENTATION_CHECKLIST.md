@@ -18,13 +18,13 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 
 ---
 
-## WP1 -- A1 (03c, 03z, 04 guards)   Commit: ______   Review: [ ]
-- [ ] A1.1 03c step 4 plot-aware: missing plot-years extracted (re-download of the needed years)
-- [ ] A1.2/A1.4 03c `stop()` unless every visit has `n_years_used == win_end - win_start + 1`
-- [ ] A1.3 `stopifnot(!anyNA(...))` on gdd_3, cmi_gs, soil_pc1 at the end of 03z and in 04 (`iv`)
-- [ ] A1.5 04: same NA check on the first-visit covariates in `plot_info` (needs C1 point 1 columns; add the check in WP4 if the columns do not exist yet -- note it in the log)
-- [ ] User ran on the Mac: 03c -> 03z -> 04 -> 04x
-- [ ] Check: 0 NA climate; all other visits identical to the previous `climate_covariates.rds`; 04 plots/intervals/events unchanged; 5 plots plausible (7209002301 ~ 7209002302); 04x matches 04
+## WP1 -- A1 (03c, 03z, 04 guards)   Commit: 7f5a1b6, e4e1f41, (ticks) see log   Review: [ ]
+- [x] A1.1 03c step 4 plot-aware: missing plot-years extracted (re-download of the needed years)
+- [x] A1.2/A1.4 03c `stop()` unless every visit has `n_years_used == win_end - win_start + 1`
+- [x] A1.3 `stopifnot(!anyNA(...))` on gdd_3, cmi_gs, soil_pc1 at the end of 03z and in 04 (`iv`)
+- [x] A1.5 04: same NA check on the first-visit covariates in `plot_info` (needs C1 point 1 columns; add the check in WP4 if the columns do not exist yet -- note it in the log)
+- [x] User ran on the Mac: 03c -> 03z -> 04 -> 04x
+- [x] Check: 0 NA climate; all other visits identical to the previous `climate_covariates.rds`; 04 plots/intervals/events unchanged; 5 plots plausible (7209002301 ~ 7209002302); 04x matches 04
 
 ## WP2 -- A2-A11, B7 (04, covariate_spec.R, config.R, 04b, tests/04c)   Commit: fa1d432   Review: [ ]
 - [x] A2 harvest: light + heavy only, never "any" (04, covariate_spec, recount_events, tests/04c)  -- *69 of 69 harvest terms on scratch (17 + 21 + 31 -> "3level"); no `harv_any`/`tsd_harv` left in the WP2 files or 05a*
