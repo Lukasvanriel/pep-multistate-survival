@@ -68,6 +68,7 @@ if (file.exists(f2)) { s2 <- readRDS(f2); cat("Stage 2: loaded checkpoint\n") } 
 }
 report_fits(s2$tidy, s2$theta, s2$n_events, "Stage 2")
 cat(sprintf("  P1: %d of %d plots without a usable candidate -> entry W_j/2 (marked)\n", sum(s2$p1$fallback), nrow(s2$p1)))
+cat(sprintf("  P1 max jumps of any path (Stage 2): %d (plot %s); limit P1_MAX_JUMPS %d\n", p1_jump_summary(s2$p1)$max, p1_jump_summary(s2$p1)$id_pe, P1_MAX_JUMPS))
 cat(sprintf("  P2: %d exits, %d by midpoint (dropped / not-ok transition)\n", s2$p2_event, s2$p2_midpoint))
 cat("  P2 exits by source (Stage 2):", p2_source_line(s2$p2_src), sprintf("| rule exits at the end visit %d\n", s2$p2_rule_at_end))
 fwrite(rbind(cbind(stage = "stage1", s1$p2_src), cbind(stage = "stage2", s2$p2_src)), p2_stage_path)
@@ -112,6 +113,7 @@ for (batch in split(todo, ceiling(seq_along(todo) / N_WORKERS))) {
     fwrite(r$p1_state, state_path, append = file.exists(state_path))     # WP4: P1 fallbacks by first state, one block per imputation
     fwrite(r$p2_src, p2src_path, append = file.exists(p2src_path))      # WP5: exit_source counts per transition, one block per imputation
     cat(sprintf("  m=%d: P2 exits by source: %s\n", r$diag$m, p2_source_line(r$p2_src)))
+    cat(sprintf("  m=%d: P1 max jumps of any path: %d (plot %s); limit %d\n", r$diag$m, r$diag$p1_max_jumps, r$diag$p1_max_jumps_plot, P1_MAX_JUMPS))
     cat(sprintf("  m=%d: P1 fallbacks %d of %d plots; by first state (n_fallback / n_plots):", r$diag$m, sum(r$p1_state$n_fallback), sum(r$p1_state$n_plots)),
         paste(sprintf("%s %d/%d", r$p1_state$first_state, r$p1_state$n_fallback, r$p1_state$n_plots), collapse = "; "), "\n")
   }

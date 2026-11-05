@@ -209,10 +209,10 @@ cat("8a. guard A stops on an Inf hazard (names imputation, transition, rows, lar
 thC <- theta; thC$ok[] <- TRUE; thC$alpha[] <- 1; thC$beta[] <- 0
 for (k in c(ia, ib, ir)) thC$intercept[k] <- log(1e8)
 t0 <- proc.time()["elapsed"]; e3 <- catch(p1_entries(thC, inp, 20L, "draw", 1L)); tt <- proc.time()["elapsed"] - t0
-ok(is.character(e3) && grepl("^P1 jump limit", e3) && grepl("10000 jumps", e3) && grepl("plot", e3) && grepl("first state", e3) && grepl("a->b|b->a", e3) && grepl("= 1e\\+08", e3) && tt < 60, "jump limit: message / time", c(e3, tt))
+ok(is.character(e3) && grepl("^P1 jump limit", e3) && grepl("500 jumps", e3) && grepl("plot", e3) && grepl("first state", e3) && grepl("a->b|b->a", e3) && grepl("= 1e\\+08", e3) && tt < 60, "jump limit: message / time", c(e3, tt))
 P1_MAX_JUMPS_orig <- P1_MAX_JUMPS; P1_MAX_JUMPS <- 7L; e4 <- catch(p1_entries(thC, inp, 20L, "draw", 1L)); P1_MAX_JUMPS <- P1_MAX_JUMPS_orig
 ok(is.character(e4) && grepl("exceeded 7 jumps", e4), "jump limit reads the constant from config", e4)
-cat(sprintf("8b. jump limit stops a finite cycling theta (%.1f s); the limit is the constant P1_MAX_JUMPS (10000 from config.R)\n    %s\n", tt, substr(e3, 1, 420)))
+cat(sprintf("8b. jump limit stops a finite cycling theta (%.1f s); the limit is the constant P1_MAX_JUMPS (500 from config.R)\n    %s\n", tt, substr(e3, 1, 420)))
 # (c) make_p2_draw with non-finite hazards or alpha: uniform_nonfinite, no loop
 inp_p <- mock_inp(); for (cs in list(list(ic = 800, be = 0, al = 1.5), list(ic = 0, be = Inf, al = 1.5), list(ic = 0, be = 0, al = NaN), list(ic = -800, be = 0, al = 1.5))) {
   th_p <- list(ok = c(TRUE, TRUE), intercept = rep(cs$ic, 2), beta = matrix(cs$be, 2, 1), alpha = rep(cs$al, 2)); dgp <- new.env()
@@ -223,12 +223,19 @@ for (lam_bad in c(Inf, NaN)) { th_m <- list(ok = c(TRUE, TRUE), intercept = rep(
   x <- make_p2_moment(th_m, inp_p, dgm)(8, 31, "regen", "a", 1L); ok(dgm$src[1L] == "moment_fallback" && x == 19.5, sprintf("make_p2_moment with hazard %s", lam_bad), dgm$src[1L]) }
 cat("8c. make_p2_draw: Inf / NaN / zero hazard and NaN alpha -> uniform_nonfinite on (a, b); closed form, no loop. make_p2_moment: Inf / NaN hazard -> moment_fallback\n\n")
 
+# (d) max jumps per path: column of p1_entries, summary, no stop below the limit
+ok("max_jumps" %in% names(pe1) && is.integer(pe1$max_jumps) && !anyNA(pe1$max_jumps) && max(pe1$max_jumps) < P1_MAX_JUMPS, "p1_entries: max_jumps column", summary(pe1$max_jumps))
+thB <- theta; thB$ok[] <- TRUE; thB$alpha[] <- 1; thB$beta[] <- 0; for (k in c(ia, ib)) thB$intercept[k] <- log(3)          # a <-> b at 3 per year: long but finite paths (about 3 W_j jumps)
+set.seed(9); peB <- p1_entries(thB, inp, 10L, "draw", 1L); sm <- p1_jump_summary(peB)
+ok(sm$max > 50 && sm$max < P1_MAX_JUMPS && sm$max == max(peB$max_jumps) && sm$id_pe == peB$id_pe[which.max(peB$max_jumps)], "long finite paths (a<->b at 3/y) must pass below the limit, summary", c(sm$max, sm$id_pe))
+cat(sprintf("8d. max jumps of any path: clean theta %d (plot %s); a<->b at 3 per year %d (plot %s, below the limit %d: no stop)\n\n", p1_jump_summary(pe1)$max, p1_jump_summary(pe1)$id_pe, sm$max, sm$id_pe, P1_MAX_JUMPS))
+
 # ---- 7. run_stage1 / run_stage2 / run_one_imputation plumbing with stubbed fits -----------------------------------------------------------------------
 fit_rows <- function(rows, inp, fit_fun, only_k = NULL) { ks <- if (is.null(only_k)) integer(0) else as.integer(only_k); list(models = list(), n_events = integer(0), data = list(), ks = integer(0)) }
 extract_theta <- function(models, inp, stat = "mean") theta
 tidy_fit <- function(models, inp, ks = integer(0)) data.table(k = integer(0), parameter = character(0), fit_error = logical(0), sd = numeric(0))
 add_cap_columns <- function(res, data_list, ks, inp) res
-p1_entries <- function(theta, inp, M, mode, n_cores, m = NA_integer_) data.table(id_pe = inp$p1$id_pe, entry = inp$p1$W_j / 2, n_cand = 1L, fallback = FALSE)
+p1_entries <- function(theta, inp, M, mode, n_cores, m = NA_integer_) data.table(id_pe = inp$p1$id_pe, entry = inp$p1$W_j / 2, n_cand = 1L, fallback = FALSE, max_jumps = 3L)
 draw_theta_m <- function(models, inp, theta_seed, sampler) c(theta, list(intercept_dec = rep(0, K), beta_v0 = matrix(0, K, P, dimnames = list(NULL, inp$terms)), n_fallback = 0L))
 t1 <- run_stage1(inp, NULL); ok(t1$p2_src[exit_source == "rule", sum(n)] == nrow(rule) && t1$p2_rule_at_end == s1$dg$n_rule_at_end, "run_stage1 p2_src")
 t2 <- run_stage2(inp, theta, NULL)
@@ -237,7 +244,8 @@ ok(t2$p2_src[exit_source == "rule", sum(n)] == nrow(rule) && all(t2$p2$exit_sour
 set.seed(11); im <- run_one_imputation(1L, inp, list(), theta, NULL)
 ex <- im$extras$p2; ok(all(c("exit_source", "exit_abs", "floored") %in% names(ex)) && nrow(ex) == nrow(rule) + sum(ex$exit_source != "rule"), "extras$p2 columns")
 ok(all(ex$exit_source %in% c("rule", "draw", "uniform", "uniform_nonfinite")), "imputation sources", table(ex$exit_source))
-dgn <- im$diag; ok(dgn$p2_rule == nrow(rule) && dgn$p2_rule + dgn$p2_draw + dgn$p2_uniform + dgn$p2_uniform_nonfinite == dgn$p2_events && dgn$p2_midpoint == 0L, "mi_diag columns", dgn)
+dgn <- im$diag; ok(dgn$p1_max_jumps == 3L && dgn$p1_max_jumps_plot == inp$p1$id_pe[1], "mi_diag p1_max_jumps columns (stub p1: 3 jumps, first plot)", dgn)
+ok(dgn$p2_rule == nrow(rule) && dgn$p2_rule + dgn$p2_draw + dgn$p2_uniform + dgn$p2_uniform_nonfinite == dgn$p2_events && dgn$p2_midpoint == 0L, "mi_diag columns", dgn)
 ok(all(c("m", "transition", "exit_source", "n") %in% names(im$p2_src)) && all(im$p2_src$m == 1L), "p2_src per imputation")
 # reproducible with the seed
 set.seed(11); im2 <- run_one_imputation(1L, inp, list(), theta, NULL); ok(identical(im2$extras$p2, ex), "imputation P2 not reproducible with the seed")

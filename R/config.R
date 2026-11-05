@@ -53,4 +53,5 @@ TSD_FORM         <- "log1p"   # TSD model columns: "log1p" = log(TSD in years + 
 MIN_EVENTS       <- 15L       # transition kept with >= this many state changes; also the per-term minimum for fire / pest / harvest
                               # (light + heavy together) (S17 = 20, S23 = 10). Read by 04, 04b recount_events(), tests/04c.
 XREGEN_EXIT_RULE <- TRUE      # X->regen exit placed at the heavy disturbance (C2); FALSE only as a check; used from WP5
-P1_MAX_JUMPS     <- 10000L    # P1 candidate path simulation (05a, WP5): a path with more jumps stops with an error (a real path has well under 50 over 120 y)
+P1_MAX_JUMPS     <- 500L      # P1 candidate path simulation (05a, WP5): a path with more jumps stops with an error (user decision 2026-11-04: 500 jumps over <= 120 y is
+                              # already > 4 transitions per year; a real path has well under 50; paths between 500 and 10,000 jumps would pass silently with junk candidates)

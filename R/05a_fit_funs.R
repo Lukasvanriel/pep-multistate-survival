@@ -322,9 +322,9 @@ p1_jump_stop <- function(ctx, pc, np, lk, entry, state, out_k, ok, W) {
                paste(sprintf("%s = %.4g", if (is.null(ctx$labels)) ks else ctx$labels[ks], pc$L[q, ks]), collapse = ", ")), call. = FALSE)
 }
 p1_candidates_pw <- function(pc, start_idx, s_j, W, alpha, out_k, to_idx, ok, M, ctx = NULL) {
-  if (W <= 0) return(if (s_j == start_idx) rep(0, M) else numeric(0))
+  if (W <= 0) return(structure(if (s_j == start_idx) rep(0, M) else numeric(0), max_jumps = 0L))
   np <- pc$npre; p0 <- pc$p0[seq_len(np)]; p1e <- pc$p1[seq_len(np)]; LA <- pc$LA[seq_len(np), , drop = FALSE]
-  cand <- numeric(M); n <- 0L
+  cand <- numeric(M); n <- 0L; mx <- 0L      # mx = the largest number of jumps of any path simulated for this plot (attribute max_jumps of the result)
   for (i in seq_len(M)) {
     state <- start_idx; entry <- 0; nj <- 0L; lk <- integer(6L)
     repeat {
@@ -337,9 +337,10 @@ p1_candidates_pw <- function(pc, start_idx, s_j, W, alpha, out_k, to_idx, ok, M,
       nj <- nj + 1L; lk <- c(lk[-1L], bk)
       if (nj > P1_MAX_JUMPS) p1_jump_stop(ctx, pc, np, lk, entry, state, out_k, ok, W)
     }
+    mx <- max(mx, nj)
     if (state == s_j) { n <- n + 1L; cand[n] <- entry }
   }
-  cand[seq_len(n)]
+  structure(cand[seq_len(n)], max_jumps = mx)
 }
 
 log1mexp <- function(h) ifelse(h > 0, ifelse(h < log(2), log(-expm1(-h)), log1p(-exp(-h))), -Inf)   # log(1 - exp(-h)), h >= 0
@@ -391,10 +392,11 @@ p1_entries <- function(theta, inp, M = SIM_M, mode = c("mean", "draw"), n_cores 
     pc <- p1_pieces(j, theta, inp, L0, Liv, f_tsd)
     cand <- p1_candidates_pw(pc, inp$start_idx, sj[j], W[j], theta$alpha, inp$out_k, to_idx, theta$ok, M,
                              ctx = list(id_pe = inp$p1$id_pe[j], first_state = inp$p1$first_state[j], labels = inp$td$label))
-    if (!length(cand)) return(c(NA_real_, 0))
+    mj <- attr(cand, "max_jumps"); if (is.null(mj)) mj <- NA_integer_
+    if (!length(cand)) return(c(NA_real_, 0, mj))
     w <- p1_weights_pw(cand, sj[j], lo[j], hi[j], W[j], pc, theta$alpha, inp$out_k, theta$ok)
-    if (is.null(w)) return(c(NA_real_, length(cand)))
-    c(if (mode == "mean") sum(cand * w) else cand[sample.int(length(cand), 1L, prob = w)], length(cand))
+    if (is.null(w)) return(c(NA_real_, length(cand), mj))
+    c(if (mode == "mean") sum(cand * w) else cand[sample.int(length(cand), 1L, prob = w)], length(cand), mj)
   }
   res <- parallel::mclapply(seq_along(W), one, mc.cores = n_cores)
   bad <- vapply(res, function(r) inherits(r, "try-error") || is.null(r), logical(1))
@@ -402,8 +404,11 @@ p1_entries <- function(theta, inp, M = SIM_M, mode = c("mean", "draw"), n_cores 
   res <- do.call(rbind, res)
   fb <- is.na(res[, 1])
   entry <- ifelse(fb, W / 2, res[, 1])
-  data.table(id_pe = inp$p1$id_pe, entry = entry, n_cand = res[, 2], fallback = fb)
+  data.table(id_pe = inp$p1$id_pe, entry = entry, n_cand = res[, 2], fallback = fb, max_jumps = as.integer(res[, 3]))
 }
+
+# largest number of jumps of any P1 path and its plot (printed per imputation and for Stage 2; mi_diag columns p1_max_jumps, p1_max_jumps_plot)
+p1_jump_summary <- function(p1) { i <- which.max(p1$max_jumps); list(max = p1$max_jumps[i], id_pe = p1$id_pe[i]) }
 
 # P1 fallbacks (no usable candidate) by first state: n_plots, n_fallback, share (printed per imputation; compare with the main run's 124-196 in total)
 p1_fallback_by_state <- function(p1, inp, m = NA_integer_) {
@@ -707,7 +712,7 @@ run_one_imputation <- function(m, inp, models_seed, theta_seed, fit_fun, M = SIM
   # B6: per-fit cap diagnostic (one value per fit, repeated over its parameter rows like mlik); fixed column order for fwrite(append)
   res <- add_cap_columns(res, f$data, f$ks, inp)
   p2 <- p2_event_table(b, dg); p2_src <- p2_source_counts(p2, m)
-  out <- list(p1_state = p1_fallback_by_state(p1, inp, m), p2_src = p2_src, res = res, diag = data.table(m = m, p1_fallback = sum(p1$fallback), p1_no_candidate = sum(p1$n_cand == 0),
+  out <- list(p1_state = p1_fallback_by_state(p1, inp, m), p2_src = p2_src, res = res, diag = data.table(m = m, p1_fallback = sum(p1$fallback), p1_no_candidate = sum(p1$n_cand == 0), p1_max_jumps = p1_jump_summary(p1)$max, p1_max_jumps_plot = p1_jump_summary(p1)$id_pe,
                                     p2_events = dg$n_event, p2_midpoint = dg$n_midpoint, as.data.table(p2_diag_cols(p2_src, dg)),
                                     n_theta_fallback = th$n_fallback, n_fit_error = sum(vapply(f$models, function(x) !is.null(x$error), logical(1))),
                                     n_floored = b$n_floored, n_fitted = length(f$ks)))
