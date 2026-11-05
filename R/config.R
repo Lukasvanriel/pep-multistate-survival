@@ -52,6 +52,7 @@ COEF_PRIOR_SD    <- 5         # SD of the N(0, sd^2) prior on the coefficients (
 TSD_FORM         <- "log1p"   # TSD model columns: "log1p" = log(TSD in years + 1) (main); "linear" = TSD in decades (S24)
 MIN_EVENTS       <- 15L       # transition kept with >= this many state changes; also the per-term minimum for fire / pest / harvest
                               # (light + heavy together) (S17 = 20, S23 = 10). Read by 04, 04b recount_events(), tests/04c.
+MIN_EVENTS_S1    <- 20L       # sensitivity/10, S1: interactions with >= this many disturbed events of the level (WP7 D7, added 2026-11-05)
 XREGEN_EXIT_RULE <- TRUE      # X->regen exit placed at the heavy disturbance (C2); FALSE only as a check; used from WP5
 P1_MAX_JUMPS     <- 500L      # P1 candidate path simulation (05a, WP5): a path with more jumps stops with an error (user decision 2026-11-04: 500 jumps over <= 120 y is
                               # already > 4 transitions per year; a real path has well under 50; paths between 500 and 10,000 jumps would pass silently with junk candidates)
