@@ -38,8 +38,8 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [x] A10 counts on end-visit flags (unchanged; confirm)  -- *confirmed unchanged; recount_events passes on the final rows*
 - [x] A11 n_undist in transition_set; no z_gdd_3 where n_undist == 0 and a disturbance term exists  -- *only regen->sugar_maple (n_undist 0) loses z_gdd_3 on scratch*
 - [x] B7 switches in config.R (WEIBULL_VARIANT, COEF_PRIOR_SD, TSD_FORM, MIN_EVENTS, XREGEN_EXIT_RULE); LOW_EVENTS_MAX <- MIN_EVENTS + 4L  -- *switches in config.R; `LOW_EVENTS_MAX <- MIN_EVENTS + 4L` is done in WP7 (09), not here (user decision 2026-11-04)*
-- [ ] User ran on the Mac: 04 and tests/04c
-- [ ] Check (implementation step 2): only harvest terms (A2, A4, A6) and regen->sugar_maple's GDD main term (A11) change; transitions, events, fire and pest terms identical; 69 harvest terms; 1,537 X->regen intervals with D_heavy
+- [x] User ran on the Mac: 04 and tests/04c  -- *2026-11-04: 04 and 04c ALL CHECKS PASSED on the full table (11,286 plots / 36,251 intervals / 8,770 changes)*
+- [x] Check (implementation step 2): only harvest terms (A2, A4, A6) and regen->sugar_maple's GDD main term (A11) change; transitions, events, fire and pest terms identical; 69 harvest terms; 1,537 X->regen intervals with D_heavy  -- *04c baseline check vs data/tables/main: 0 differences in kept set, n_events, n_fire, n_pest, n_harv0/1/2, fire_term, pest_term (90 kept); harvest term changed in 52 (21 any + 31 none -> 3level); 69 harvest terms, fire 14, pest 28; 1,537 (1,223 / 315); only regen->sugar_maple lacks z_gdd_3*
 
 ## WP3 -- B1-B6 (05a fit + theta, 05, 07, 08)   Commit: 4237012   Review: [x]
 - [ ] B1 variant from config in every INLA call; SIM_DIR / model_fitting.R source removed from 05 and 07; run_meta records it  -- *code done (05a, 05, 07; sensitivity/11 is WP7); check `run_meta$inla_args$control.family[[1]]$variant == 0` needs a 05 run on the Mac (see the WP5 item "B1/B2/B5 run-time checks"); `wp3_B4_check.R inla` asserts the variant given to INLA on one real fit*

@@ -343,3 +343,22 @@ Template:
 | 18 | `cat data-output/final/fits/p1_fallback_by_state_final.csv` | P1 fallbacks by first state, vs the main run's 124-196 in total (watch the 681 unharvested sugar-maple-first plots) |
 | 19 | `rm -rf data-output/final/fits data-output/final/fits_subsample` | WP6 starts clean: no WP5 checkpoint (stage1.rds, stage2.rds, extras, mi_raw) is reused. Then WP6: `Rscript R/05_fit_inla.R` (full, M_MI 30) |
 | 20 | after the full WP6 05: `Rscript R/07_redraw.R 2>&1 \| tee data-output/final/redraw_console.log` then `grep -n -A95 "Screen reference table" data-output/final/redraw_console.log` | B5: all 90 kept transitions printed (k, icpt_ref, icpt_sd_ref, n_ref, label) before the first "Batch m=" line. (Depends on the full 05 run, so it belongs to WP6.) |
+
+## WP2 -- Mac run results (2026-11-04)
+- Run by the user on the full table (TABLE_DIR = data/tables/final): `Rscript R/04_prepare_inla.R`, `Rscript R/tests/04c_check_rows.R`. 04c: ALL CHECKS PASSED.
+- Against the WP2 Check:
+  | Item | Expected | Observed |
+  |---|---|---|
+  | Plots / intervals / changes | 11,286 / 36,251 / 8,770 | same |
+  | Kept transitions | 90, same set as main | 90, same set |
+  | n_events, n_fire, n_pest, n_harv0/1/2, fire_term, pest_term vs data/tables/main | identical | 0 differences in every column |
+  | Harvest terms | 69 | 69 (52 changed: 21 any, 31 none -> 3level; 21 stay none) |
+  | Fire / pest terms | 14 / 28 | 14 / 28 |
+  | X->regen intervals with D_heavy | 1,537 (1,223 / 315) | 1,537 (1,223 / 315, both 1) |
+  | C(i) edge case | logged | 9 intervals, 0 X->regen |
+  | Transitions without z_gdd_3 | regen->sugar_maple only | regen->sugar_maple only (n_undist 0; 18 light / 49 heavy) |
+  | other_temperate->yellow_birch | no heavy GDD x / TSD | z_gdd_3 + z_cmi_gs + z_soil_pc1 + harv_light + harv_heavy + gdd_x_harv_light + tsd_harv_light |
+  | Max TSD (years) | log(176) ~ 5.2 | 174 fire / 157 pest / 165 harvest; log1p column max 5.16 |
+  | First-visit flags (plot_info) | none-flag plots 6,330 | 6,330; NA counts all 0 |
+- Not checked by these runs: `n_undist` is not compared with any baseline (the old table has no such column); 04x was not part of this output.
+- Open: `05a_fit_funs.R` header (line 8) still says "(91)" kept transitions; the table has 90. Comment only, not changed.
