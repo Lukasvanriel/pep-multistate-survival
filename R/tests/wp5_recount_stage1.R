@@ -18,6 +18,6 @@ rc <- recount_events(s$b$rows, inp$tr)                # stops if a count differs
 cat(sprintf("recount_events(): OK, %d kept transitions, counts equal transition_set, all >= %d events\n", nrow(rc), MIN_EVENTS))
 cat("Stage 1 exits by source:", p2_source_line(p2_source_counts(s$p2)), "\n")
 xr <- inp$iv[is_change == TRUE & state_end == "regen" & !is.na(D_heavy)]
-cat(sprintf("X->regen change intervals with D_heavy: %d (plan: 1,537 = heavy harvest 1,223 + fire 315 - 1 both; printed for information) | rule exits %d | rule exits at the end visit %d | floored segments %d\n",
-            nrow(xr), sum(s$p2$exit_source == "rule"), s$dg$n_rule_at_end, s$b$n_floored))
+cat(sprintf("X->regen change intervals with D_heavy: %d (plan: 1,537 = heavy harvest 1,223 + fire 315 - 1 both; printed for information) | rule exits %d | rule exits at the end visit %d | floored event segments %d | floored post-rule stubs %d (a stub starting at its end visit = an exit at the end visit)\n",
+            nrow(xr), sum(s$p2$exit_source == "rule"), s$dg$n_rule_at_end, s$b$n_floored_event, s$b$n_floored_stub))
 cat("ALL CHECKS PASSED\n")

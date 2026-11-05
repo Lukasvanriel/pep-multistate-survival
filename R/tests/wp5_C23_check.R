@@ -230,6 +230,43 @@ set.seed(9); peB <- p1_entries(thB, inp, 10L, "draw", 1L); sm <- p1_jump_summary
 ok(sm$max > 50 && sm$max < P1_MAX_JUMPS && sm$max == max(peB$max_jumps) && sm$id_pe == peB$id_pe[which.max(peB$max_jumps)], "long finite paths (a<->b at 3/y) must pass below the limit, summary", c(sm$max, sm$id_pe))
 cat(sprintf("8d. max jumps of any path: clean theta %d (plot %s); a<->b at 3 per year %d (plot %s, below the limit %d: no stop)\n\n", p1_jump_summary(pe1)$max, p1_jump_summary(pe1)$id_pe, sm$max, sm$id_pe, P1_MAX_JUMPS))
 
+# (e) WP5 review: guard A covers everything P1 uses -- finite L whose L^alpha overflows, a non-finite piece Lp, NaN / Inf weights
+thO <- theta; thO$ok[] <- TRUE; thO$beta[] <- 0; thO$alpha[] <- 1; thO$intercept[ia] <- log(1e200); thO$alpha[ia] <- 3          # lambda 1e200 finite, lambda^3 = Inf
+eO <- catch(p1_entries(thO, inp, 20L, "draw", 1L, m = 2L))
+ok(is.character(eO) && grepl("^P1 guard A \\(pieces of plot", eO) && grepl("a->b", eO) && grepl("lambda\\^alpha", eO) && grepl("first state", eO), "guard A: finite L with L^alpha overflow must stop in p1_pieces", eO)
+L0c <- lambda_matrix(theta, inp$X0); Livc <- lambda_matrix(theta, inp$Xiv)
+# the synthetic tables have no disturbance onsets, so give plot 1 a fire onset at 0.3 W_j: the pieces after the onset switch the fire flag on (fire_f = 1) -> Inf with beta(fire_f) = 800
+inpO <- inp; inpO$on$fire[1] <- 0.3 * inp$p1$W_j[1]; thP <- theta; thP$beta[, "fire_f"] <- 800
+ok(all(is.finite(L0c)) && all(is.finite(Livc)), "Lp test setup: base and interval hazards of the clean theta finite")
+ePs <- catch(p1_pieces(1L, thP, inpO, L0c, Livc))
+ok(is.character(ePs) && grepl("^P1 guard A \\(pieces of plot", ePs) && grepl("non-finite lambda and", ePs), "guard A: a non-finite piece before the first visit (Lp) must stop", ePs)
+ok(is.null(catch(p1_pieces(1L, theta, inpO, L0c, Livc))), "same onset, clean theta: pieces build without stop")
+jw <- which(inp$p1$W_j > 0)[1]; pcw <- p1_pieces(jw, theta, inp, L0c, Livc); sw <- inp$p1$s_idx[jw]; Ww <- inp$p1$W_j[jw]; cw <- Ww / 2
+pcn <- pcw; pcn$LA[] <- NaN
+ew <- catch(p1_weights_pw(cw, sw, NA_real_, inp$p1$obs_upper[jw], Ww, pcn, theta$alpha, inp$out_k, theta$ok, ctx = list(id_pe = inp$p1$id_pe[jw], first_state = inp$p1$first_state[jw])))
+ok(is.character(ew) && grepl("^P1 guard A \\(weights of plot", ew) && grepl("NaN", ew), "p1_weights_pw: NaN weights must stop, not return NULL", ew)
+pci <- pcw; pci$LA[] <- Inf   # infinite cumulative hazards give NaN log weights (Inf - Inf): an error now, no longer a silent NULL
+ei <- catch(p1_weights_pw(cw, sw, NA_real_, inp$p1$obs_upper[jw], Ww, pci, theta$alpha, inp$out_k, theta$ok))
+ok(is.character(ei) && grepl("^P1 guard A \\(weights", ei), "p1_weights_pw: infinite cumulative hazards must stop", ei)
+pcz <- pcw; pcz$LA[] <- 0     # zero hazard: P(change in (lo, hi]) = 0 for every candidate -> all weights zero = the normal fallback (NULL), not an error
+wz <- tryCatch(p1_weights_pw(cw, sw, 0.2 * Ww, 0.4 * Ww, Ww, pcz, theta$alpha, inp$out_k, theta$ok), error = function(e) conditionMessage(e))
+ok(is.null(wz), "p1_weights_pw: all weights zero stays the normal fallback (NULL)", wz)
+set.seed(8); pe3 <- p1_entries(theta, inp, 20L, "draw", 1L); ok(identical(pe1, pe3), "clean theta: p1_entries identical after the review changes")
+cat("8e. guard A on pieces / L^alpha / weights:\n    ", substr(eO, 1, 260), "\n     ", substr(ePs, 1, 200), "\n     ", substr(ew, 1, 200), "\n\n")
+
+# (f) WP5 review: resume guard of 05 (run_id.rds: git HEAD, M_MI, SUBSAMPLE_N, RUN_TAG)
+td0 <- tempfile("fits"); dir.create(td0); id0 <- run_id_now("final", 30L, NULL, ".")
+ok(isTRUE(check_resume_guard(td0, id0)) && file.exists(file.path(td0, "run_id.rds")), "resume guard: first start writes run_id.rds")
+saveRDS(1, file.path(td0, "stage1.rds")); ok(isTRUE(check_resume_guard(td0, id0)), "resume guard: same id resumes")
+for (cs in list(list("M_MI", 6L), list("SUBSAMPLE_N", 500L), list("RUN_TAG", "main"), list("git_head", "0000000000000000000000000000000000000000"))) {
+  id1 <- id0; id1[[cs[[1]]]] <- cs[[2]]; e6 <- catch(check_resume_guard(td0, id1, show_dir = "data-output/final/fits"))
+  ok(is.character(e6) && grepl("^Resume guard", e6) && grepl(cs[[1]], e6, fixed = TRUE) && grepl("delete data-output/final/fits", e6, fixed = TRUE), sprintf("resume guard must stop when %s differs", cs[[1]]), e6) }
+td1 <- tempfile("fits"); dir.create(td1); saveRDS(1, file.path(td1, "stage1.rds")); e7 <- catch(check_resume_guard(td1, id0, show_dir = "data-output/final/fits"))
+ok(is.character(e7) && grepl("no run_id.rds", e7) && grepl("delete data-output/final/fits", e7, fixed = TRUE), "resume guard: stage1.rds without run_id stops", e7)
+td2 <- tempfile("fits"); dir.create(td2); saveRDS(1, file.path(td2, "run_meta_final.rds")); ok(is.character(catch(check_resume_guard(td2, id0))), "resume guard: run_meta without run_id stops")
+src05 <- readLines("R/05_fit_inla.R"); ok(any(grepl("check_resume_guard\\(OUT_DIR, RUN_ID", src05)) && any(grepl("git_head = RUN_ID\\$git_head, RUN_TAG = RUN_TAG", src05)) && any(grepl("SUBSAMPLE_N = if", src05)) && any(grepl("M_MI = M_MI", src05)), "05 calls the guard and run_meta records git HEAD, RUN_TAG, SUBSAMPLE_N, M_MI")
+ok(!is.na(id0$git_head) || TRUE, "git head may be NA outside a repository"); cat(sprintf("8f. resume guard: first start writes run_id; same id resumes; a change in M_MI / SUBSAMPLE_N / RUN_TAG / git HEAD, or an old directory without run_id, stops with 'delete ...fits' (git head here: %s)\n\n", substr(id0$git_head, 1, 8)))
+
 # ---- 7. run_stage1 / run_stage2 / run_one_imputation plumbing with stubbed fits -----------------------------------------------------------------------
 fit_rows <- function(rows, inp, fit_fun, only_k = NULL) { ks <- if (is.null(only_k)) integer(0) else as.integer(only_k); list(models = list(), n_events = integer(0), data = list(), ks = integer(0)) }
 extract_theta <- function(models, inp, stat = "mean") theta

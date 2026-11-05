@@ -101,7 +101,8 @@ build_rows <- function(iv, first_entry, states, tr, p2_fun = p2_midpoint,
   rows <- cbind(rows, iv[rows$iv_row, ..keep_cols])
   rows[tr, kept := i.kept, on = c("from", "to")]
   setorder(rows, id_pe, seg_id, to)
-  list(rows = rows, segs = segs, n_plots = nrow(ids), n_floored = sum(segs$floored))
+  list(rows = rows, segs = segs, n_plots = nrow(ids), n_floored = sum(segs$floored),
+       n_floored_event = sum(segs$floored & segs$type == "event"), n_floored_stub = sum(segs$floored & segs$type == "stub"))   # event: exit at the lower bracket edge; stub: new sojourn that starts at its end visit (= exit at the end visit)
 }
 
 # ------------------------------------------------------------------------------

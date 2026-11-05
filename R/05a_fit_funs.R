@@ -289,6 +289,15 @@ p1_pieces <- function(j, theta, inp, L0, Liv, f_tsd = tsd_fun()) {
   L <- rbind(Lp, Liv[r, , drop = FALSE])
   LA <- matrix(0, nrow(L), K); okk <- which(theta$ok)
   LA[, okk] <- L[, okk, drop = FALSE]^rep(theta$alpha[okk], each = nrow(L))
+  # WP5 review, guard A on everything P1 uses: pieces before the first visit (Lp) and L^alpha of ok transitions must be finite
+  if (!all(is.finite(L[, okk, drop = FALSE])) || !all(is.finite(LA[, okk, drop = FALSE]))) {
+    badk <- okk[colSums(!is.finite(L[, okk, drop = FALSE])) > 0 | colSums(!is.finite(LA[, okk, drop = FALSE])) > 0]
+    det <- vapply(badk, function(k) sprintf("%s (alpha %.3g, max lambda %.4g, max lambda^alpha %.4g, %d non-finite lambda and %d non-finite lambda^alpha entries)",
+                    inp$td$label[k], theta$alpha[k], suppressWarnings(max(L[, k][is.finite(L[, k])], -Inf)), suppressWarnings(max(LA[, k][is.finite(LA[, k])], -Inf)),
+                    sum(!is.finite(L[, k])), sum(!is.finite(LA[, k]))), "")
+    stop(sprintf("P1 guard A (pieces of plot %s, first state %s, W_j %.3f): non-finite hazard in %d transition(s) with an ok fit: %s. No redraw, no capping, no fallback.",
+                 inp$p1$id_pe[j], inp$p1$first_state[j], W, length(badk), paste(head(det, 10), collapse = "; ")), call. = FALSE)
+  }
   list(p0 = c(p0, inp$iv$t_start[r]), p1 = c(p1e, inp$iv$t_end[r]), L = L, LA = LA, npre = npre)
 }
 
@@ -357,10 +366,14 @@ p1_H_between <- function(pc, ks, alpha, cand, a, b) {
 
 # C5: weight = [S(lo - e) - S(hi - e)] / S(W_j - e) with a change observed in (lo, hi]; S(hi - e) / S(W_j - e) without. In log space:
 # S(lo)/S(W) = exp(-H(W, lo)); [S(lo) - S(hi)]/S(W) = exp(-H(W, lo)) * (1 - exp(-H(lo, hi))); S(hi)/S(W) = exp(-H(W, hi)).
-p1_weights_pw <- function(cand, s_j, lo, hi, W, pc, alpha, out_k, ok) {
+p1_weights_pw <- function(cand, s_j, lo, hi, W, pc, alpha, out_k, ok, ctx = NULL) {
   ks <- out_k[[s_j]]; ks <- ks[ok[ks]]
   lw <- if (!is.na(lo)) -p1_H_between(pc, ks, alpha, cand, W, lo) + log1mexp(p1_H_between(pc, ks, alpha, cand, lo, hi)) else -p1_H_between(pc, ks, alpha, cand, W, hi)
-  if (anyNA(lw) || any(lw == Inf) || all(lw == -Inf)) return(NULL)
+  # WP5 review: NaN / +Inf log weights are an error (guard A style); only "all weights zero" (all -Inf) is the normal fallback (NULL)
+  if (anyNA(lw) || any(lw == Inf))
+    stop(sprintf("P1 guard A (weights of plot %s, first state %s, W_j %.3f): %d NaN and %d +Inf log weights among %d candidates (exit hazards of the first state are finite; the cumulative hazards over the pieces are not). No redraw, no capping, no fallback.",
+                 if (is.null(ctx)) "?" else ctx$id_pe, if (is.null(ctx)) "?" else ctx$first_state, W, sum(is.na(lw)), sum(lw == Inf, na.rm = TRUE), length(lw)), call. = FALSE)
+  if (all(lw == -Inf)) return(NULL)
   w <- exp(lw - max(lw)); w / sum(w)
 }
 
@@ -394,7 +407,8 @@ p1_entries <- function(theta, inp, M = SIM_M, mode = c("mean", "draw"), n_cores 
                              ctx = list(id_pe = inp$p1$id_pe[j], first_state = inp$p1$first_state[j], labels = inp$td$label))
     mj <- attr(cand, "max_jumps"); if (is.null(mj)) mj <- NA_integer_
     if (!length(cand)) return(c(NA_real_, 0, mj))
-    w <- p1_weights_pw(cand, sj[j], lo[j], hi[j], W[j], pc, theta$alpha, inp$out_k, theta$ok)
+    w <- p1_weights_pw(cand, sj[j], lo[j], hi[j], W[j], pc, theta$alpha, inp$out_k, theta$ok,
+                       ctx = list(id_pe = inp$p1$id_pe[j], first_state = inp$p1$first_state[j]))
     if (is.null(w)) return(c(NA_real_, length(cand), mj))
     c(if (mode == "mean") sum(cand * w) else cand[sample.int(length(cand), 1L, prob = w)], length(cand), mj)
   }
@@ -681,7 +695,7 @@ run_stage1 <- function(inp, fit_fun) {
   if (isTRUE(inp$subsampled)) cat("recount_events(): skipped (SUBSAMPLE_N is set; transition_set counts are full-data counts)\n") else {
     rc <- recount_events(b$rows, inp$tr); cat(sprintf("recount_events(): OK, %d kept transitions, counts equal transition_set, all >= %d events\n", nrow(rc), MIN_EVENTS)) }
   f <- fit_rows(b$rows, inp, fit_fun)
-  list(theta = extract_theta(f$models, inp), tidy = tidy_fit(f$models, inp), n_events = f$n_events, n_floored = b$n_floored,
+  list(theta = extract_theta(f$models, inp), tidy = tidy_fit(f$models, inp), n_events = f$n_events, n_floored = b$n_floored, n_floored_event = b$n_floored_event, n_floored_stub = b$n_floored_stub,
        p2 = s$p2, p2_src = p2_source_counts(s$p2), p2_rule_at_end = s$dg$n_rule_at_end)
 }
 
@@ -774,4 +788,27 @@ pool_all <- function(raw, exclude_flagged = FALSE, sd_min = SD_MIN) {
   out[, c("npar", "lam") := NULL]
   setorder(out, k)
   out[]
+}
+
+# ---- WP5 review: resume guard of 05 ---------------------------------------------------------------------------------------------------------
+# A fits directory is only resumed by the run that started it: git HEAD, M_MI, SUBSAMPLE_N and RUN_TAG are written to <out_dir>/run_id.rds on the first start;
+# a later start that differs in any of them (or finds stage1.rds / run_meta without a run_id) stops. No automatic deletion.
+run_id_now <- function(tag, m_mi, subsample_n, root = ".") {
+  gh <- tryCatch(suppressWarnings(system2("git", c("-C", root, "rev-parse", "HEAD"), stdout = TRUE, stderr = FALSE))[1L], error = function(e) NA_character_)
+  if (length(gh) != 1L || is.na(gh) || !nzchar(gh)) gh <- NA_character_
+  list(git_head = gh, M_MI = as.integer(m_mi), SUBSAMPLE_N = if (is.null(subsample_n)) NA_integer_ else as.integer(subsample_n), RUN_TAG = as.character(tag))
+}
+check_resume_guard <- function(out_dir, id, show_dir = out_dir) {
+  path <- file.path(out_dir, "run_id.rds")
+  has_prev <- file.exists(file.path(out_dir, "stage1.rds")) || length(Sys.glob(file.path(out_dir, "run_meta_*.rds"))) > 0L
+  del <- sprintf("delete %s (rm -rf) and start again", show_dir)
+  if (file.exists(path)) {
+    prev <- readRDS(path); dif <- names(id)[!vapply(names(id), function(n) identical(prev[[n]], id[[n]]), logical(1))]
+    if (length(dif)) stop(sprintf("Resume guard: %s was started by a run that differs in %s (started: %s; now: %s). Not resuming: %s.", show_dir, paste(dif, collapse = ", "),
+                                  paste(sprintf("%s=%s", dif, vapply(prev[dif], format, "")), collapse = ", "), paste(sprintf("%s=%s", dif, vapply(id[dif], format, "")), collapse = ", "), del), call. = FALSE)
+    cat("Resume guard: run_id equal to the one that started this directory (", paste(sprintf("%s=%s", names(id), vapply(id, format, "")), collapse = ", "), ")\n", sep = "")
+  } else if (has_prev) {
+    stop(sprintf("Resume guard: %s holds stage1.rds / run_meta but no run_id.rds (started by an earlier version of 05); its git HEAD, M_MI, SUBSAMPLE_N and RUN_TAG are unknown. Not resuming: %s.", show_dir, del), call. = FALSE)
+  } else saveRDS(id, path)
+  invisible(TRUE)
 }

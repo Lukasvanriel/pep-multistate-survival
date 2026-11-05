@@ -24,9 +24,9 @@ bad <- character(0)
 cat(sprintf("Imputations read: %d | change intervals %d | X->regen intervals with D_heavy %d (plan: 1,537)\n", M, sum(iv$is_change), nrow(xr)))
 
 cat("\nExit source by imputation:\n"); print(dcast(p2[, .N, by = .(m, exit_source)], m ~ exit_source, value.var = "N", fill = 0))
-cat("\nFloored segments (exit at the last visit) and rule exits at the end visit, by imputation:\n")
+cat("\nFloored EVENT segments (exit imputed at the lower bracket edge; the table has event segments only, so the post-rule stubs of exits at the end visit are not in this count) and rule exits at the end visit, by imputation:\n")
 iv_k <- iv[, .(id_pe, interval, t_start, t_end, year_start, D_heavy)]; p2 <- merge(p2, iv_k, by = c("id_pe", "interval"), all.x = TRUE)
-print(p2[, .(floored = sum(floored), rule_at_end = sum(exit_source == "rule" & abs(exit_abs - t_end) < 1e-9)), by = m])
+print(p2[, .(floored_event_segments = sum(floored), rule_at_end = sum(exit_source == "rule" & abs(exit_abs - t_end) < 1e-9)), by = m])
 
 # C2-1, C2-2
 for (mm in seq_len(M)) {

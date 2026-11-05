@@ -35,6 +35,8 @@ dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
 source(here("R", "covariate_spec.R")); source(here("R", "04b_build_rows.R")); source(here("R", "05a_fit_funs.R"))
 RNGkind("L'Ecuyer-CMRG"); set.seed(SEED)
+RUN_ID <- run_id_now(RUN_TAG, M_MI, SUBSAMPLE_N, here::here())
+check_resume_guard(OUT_DIR, RUN_ID, show_dir = sub(paste0("^", here::here(), "/"), "", OUT_DIR))   # WP5 review: a changed run (git HEAD, M_MI, SUBSAMPLE_N, RUN_TAG) never resumes an old fits directory
 fit_fun <- fit_inla_models_pc
 cat(sprintf("SUBSAMPLE_N %s | M_MI %d | N_WORKERS %d\n", if (is.null(SUBSAMPLE_N)) "NULL (all plots)" else SUBSAMPLE_N, M_MI, N_WORKERS))
 cat(sprintf("INLA fits: Weibull variant %d, N(0, %g^2) on coefficients, alpha prior pc.alphaw(%s), one thread per fit\n", WEIBULL_VARIANT, COEF_PRIOR_SD, format(ALPHA_PRIOR)))
@@ -52,7 +54,7 @@ report_fits <- function(tidy, theta, n_events, tag) {
 f1 <- file.path(OUT_DIR, "stage1.rds")
 if (file.exists(f1)) { s1 <- readRDS(f1); cat("Stage 1: loaded checkpoint\n") } else {
   t0 <- proc.time()["elapsed"]; s1 <- run_stage1(inp, fit_fun); saveRDS(s1, f1)
-  cat(sprintf("Stage 1 done (%.0f s), floored segments %d\n", proc.time()["elapsed"] - t0, s1$n_floored))
+  cat(sprintf("Stage 1 done (%.0f s), floored segments %d (event segments %d; post-exit stubs %d)\n", proc.time()["elapsed"] - t0, s1$n_floored, s1$n_floored_event, s1$n_floored_stub))
 }
 p2_stage_path <- file.path(OUT_DIR, sprintf("p2_source_stages_%s.csv", RUN_TAG))
 cat("  P2 exits by source (Stage 1):", p2_source_line(s1$p2_src), sprintf("| rule exits at the end visit %d\n", s1$p2_rule_at_end))
@@ -88,7 +90,7 @@ if (!file.exists(meta_path)) saveRDS(list(time = Sys.time(), SEED = SEED, M_MI =
   inla_args = s2$models[[k_ok]]$.args[c("family", "control.fixed", "control.family", "control.inla", "control.compute", "control.mode")],
   fit_inla_models_src = deparse(fit_fun), ALPHA_PRIOR = ALPHA_PRIOR,
   SUBSAMPLE_N = if (is.null(SUBSAMPLE_N)) NA_integer_ else SUBSAMPLE_N, N_WORKERS = N_WORKERS,
-  WEIBULL_VARIANT = WEIBULL_VARIANT, COEF_PRIOR_SD = COEF_PRIOR_SD, TSD_FORM = TSD_FORM, MIN_EVENTS = MIN_EVENTS, XREGEN_EXIT_RULE = XREGEN_EXIT_RULE, rhs = inp$rhs, td = inp$td), meta_path)
+  git_head = RUN_ID$git_head, RUN_TAG = RUN_TAG, WEIBULL_VARIANT = WEIBULL_VARIANT, COEF_PRIOR_SD = COEF_PRIOR_SD, TSD_FORM = TSD_FORM, MIN_EVENTS = MIN_EVENTS, XREGEN_EXIT_RULE = XREGEN_EXIT_RULE, rhs = inp$rhs, td = inp$td), meta_path)
 
 # ---- MI loop (resumable: finished m are skipped) -------------------------------
 raw_path  <- file.path(OUT_DIR, sprintf("mi_raw_%s.csv", RUN_TAG)); diag_path <- file.path(OUT_DIR, sprintf("mi_diag_%s.csv", RUN_TAG)); err_path <- file.path(OUT_DIR, sprintf("mi_errors_%s.log", RUN_TAG))
