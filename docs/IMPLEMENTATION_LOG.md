@@ -432,3 +432,30 @@ Template:
 - Changes: `p1_candidates_pw` returns the candidates with attribute `max_jumps` (largest jump count of any path simulated for the plot, 0 for W_j = 0); `p1_entries` has a new column `max_jumps` (integer); `p1_jump_summary()` gives the maximum and its plot; `run_one_imputation` stores `p1_max_jumps` and `p1_max_jumps_plot` in `mi_diag`; `05_fit_inla.R` prints it for Stage 2 and for every imputation (`07_redraw.R` for every redraw imputation). `extras$p1` is unchanged (id_pe, entry, n_cand, fallback). Note: `mi_diag` gets two columns; the fits directory must not hold an older `mi_diag_final.csv` (WP6 starts clean anyway).
 - Checks (cloud, all passing): `wp5_C23_check.R` (jump-limit test now reads "500 jumps"; new 8d: the `max_jumps` column, a long finite theta (a <-> b at 3 per year) gives max 268 jumps and passes below the limit, the summary names the right plot; `mi_diag` columns); clean theta, `p1_entries` identical to the code before this commit (mean and draw; max jumps 12 on the synthetic table); `wp5_p1_guard_check.R` with the fake sampler still prints GUARD OK; `wp4_C1_check.R`, `wp4_C5_toy.R`, `wp3_B4_check.R` pass.
 - Not verified: the real max-jumps values (first real figures with the Stage 2 / imputation output on the Mac; a real path should have well under 50).
+
+## WP5 -- Mac results (2026-11-04)
+- Docs-only commit "WP5: Mac results" (hash: see `git log`). Source: `data-output/diagnostics/wp5_mac_outputs_2026-11-04.txt` (steps 8-17) and `data-output/final/wp5_batch.log` (step 14). Steps 1-7 (03c, 03z, 04, 04x, 04c) are not in that file and were not ticked from it. Nothing ticked without evidence in the file.
+- User decision: P1 fallbacks stay as they are (option c: entry W_j/2, marked as fallback). The per-first-state counts are reported as a limitation.
+
+| Step | Result |
+|---|---|
+| 8 `wp4_C1_check.R real` | ALL CHECKS PASSED (after the W_j = 0 fix): 11,286 plots, 4,956 flagged at the first visit, 6,330 unflagged (= plan); 5 W_j = 0 plots in the sample checked |
+| 9 `wp5_C23_check.R` | ALL CHECKS PASSED (C3 KS p 0.181 / 0.198 / 0.451 / 0.465 / 0.918) |
+| 10 `wp5_recount_stage1.R` | recount_events OK, 90 kept transitions; Stage 1 rule 1,537, midpoint 7,233; 31 rule exits at the end visit = 31 floored |
+| 11 `wp5_p1_guard_check.R` | GUARD OK (0.00 s), ALL CHECKS PASSED; p1_entries on Stage 2 theta 3.85 s, 53 fallbacks |
+| 12 run_meta | variant 0, prec 0.04, switches 0 / 5 / log1p / 15 / TRUE; SUBSAMPLE_N 500, M_MI 6 |
+| 14 `PEP_M_MI=6 05` (1,971 s) | Stage 1: failed 0/90, alpha 0.75-2.26; Stage 2: failed 0/90, alpha 0.53-2.45, P2 rule 1,537 / moment 6,868 / midpoint 365, P1 max jumps 13; m1-6: rule 1,537, draw 6,868, uniform 365, uniform_nonfinite 0, P1 max jumps 10-12 (limit 500); n_fit_error 0 |
+| 15 `wp5_C23_real_check.R 5` | ALL CHECKS PASSED; draw mean - moment point: mean 0.027 y, mean abs 1.19 y (information) |
+| 16 `wp4_C5_shift.R 1 1000` | mean shift 2.70 y (median 2.07, p90 5.92, max 26.8); PASS (> 0); plan 2.9-3.8 y is information only |
+| 17 B6 columns | NA 0 in all five columns, m1-6 |
+
+- P1 fallbacks (of 11,286 plots): Stage 2 354; m1-6: 401, 399, 366, 371, 431, 317 (main run: 124-196). By first state (n_fallback / n_plots): Stage 2 sugar_maple 124/953, cedar 52/312, other_temperate 38/686, yellow_birch 38/481, white_spruce 25/204, other_pioneer 21/181, red_maple 15/373, trembling_aspen 11/623, jack_pine 9/396, black_spruce 8/2,440, white_birch 8/822. m1-6: sugar_maple 95/121/99/112/171/100, cedar 62/88/55/54/36/33. Reported as a limitation (user decision, option c). Full table: `fits/p1_fallback_by_state_final.csv`.
+- For the Methods (user): the C5 shift run with M = 1000 (m = 1) had 85 of 9,623 plots (first state other than regen) without a usable candidate, vs 401 fallbacks at M = 200 in the imputation (m = 1, all 11,286 plots; the denominators differ). Most fallbacks are therefore a sampling shortage (too few of the M paths reach an admissible entry), not impossible routes.
+- Red flags / unexplained (not resolved):
+  1. Step 11: the drawn theta (m = 1) differs from the one diagnosed in `diag_p1_slow.R` (10,427 non-finite hazards vs 12,291; largest |beta| 15.1 vs 54.23; 153 vs 236 drawn |beta| > 5). Cause not established; the guard fired anyway.
+  2. P1 fallbacks 317-431 per imputation vs 124-196 in the main run; concentrated in sugar_maple and cedar first states. Cause not diagnosed.
+  3. 6 of 540 fits flagged near-degenerate: black_spruce->regen m1, m2, m4, m5; fir->regen m1; jack_pine->regen m4 (`flagged_fits_final.csv`).
+  4. INLA printed `gsl: interp.c:83: ERROR: x values must be strictly increasing` during Stage 2; INLA reran with improved initial values; afterwards 0/90 failed. Which fit, and whether its result is affected, was not checked.
+  5. Step 15: the head of the output (rule-exit count, zero-spread count) was not kept; only the tail and the PASS line are recorded. The 1,537 rule exits per imputation are confirmed by the 05 log.
+  6. C5 mean shift 2.70 y is below the plan's 2.9-3.8 y (information only); cause not examined.
+- Still open: B5 (07 reference table; needs the full WP6 05 run), smoke test (dropped), WP5 review chat, WP6.
