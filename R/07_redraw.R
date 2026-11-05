@@ -23,6 +23,8 @@ SEED <- 2026L; N_WORKERS <- 6L; M_MI <- 30L; SIM_M <- 200L; SD_MIN <- 1e-3; N_CO
 TARGET <- 30L; MAX_CAND <- 500L; RATIO_MIN <- 0.1; Z_MAX <- 4
 OUT_DIR <- FIT_DIR; options(width = 200)
 source(here("R", "covariate_spec.R")); source(here("R", "04b_build_rows.R")); source(here("R", "05a_fit_funs.R"))
+# WP5 review: 07 only runs on fits made by the same code as 05 used (md5 of the files 05 sources, stored in run_id.rds by 05); a difference stops
+check_resume_guard(OUT_DIR, run_id_now(RUN_TAG, NA_integer_, NULL, here::here()), show_dir = sub(paste0("^", here::here(), "/"), "", OUT_DIR), only = c("code_md5", "RUN_TAG"), write = FALSE)
 RNGkind("L'Ecuyer-CMRG"); set.seed(SEED); fit_fun <- fit_inla_models_pc   # T5 (2026-10-26): same fit function and prior as 05
 cat(sprintf("INLA fits: Weibull variant %d, N(0, %g^2) on coefficients, alpha prior pc.alphaw(%s), one thread per fit\n", WEIBULL_VARIANT, COEF_PRIOR_SD, format(ALPHA_PRIOR)))
 inp <- prepare_fit_inputs(TABLE_DIR, subsample_n = NULL, seed = SEED)

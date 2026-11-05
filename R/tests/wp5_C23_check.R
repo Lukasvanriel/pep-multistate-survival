@@ -254,18 +254,36 @@ ok(is.null(wz), "p1_weights_pw: all weights zero stays the normal fallback (NULL
 set.seed(8); pe3 <- p1_entries(theta, inp, 20L, "draw", 1L); ok(identical(pe1, pe3), "clean theta: p1_entries identical after the review changes")
 cat("8e. guard A on pieces / L^alpha / weights:\n    ", substr(eO, 1, 260), "\n     ", substr(ePs, 1, 200), "\n     ", substr(ew, 1, 200), "\n\n")
 
-# (f) WP5 review: resume guard of 05 (run_id.rds: git HEAD, M_MI, SUBSAMPLE_N, RUN_TAG)
-td0 <- tempfile("fits"); dir.create(td0); id0 <- run_id_now("final", 30L, NULL, ".")
+# (f) WP5 review: resume guard of 05 and code check of 07 (run_id.rds: md5 of the files 05 sources, M_MI, SUBSAMPLE_N, RUN_TAG)
+root <- tempfile("proj"); dir.create(file.path(root, "R"), recursive = TRUE)
+for (f in RUN_CODE_FILES) writeLines(paste("# stand-in for", f), file.path(root, f))
+td0 <- tempfile("fits"); dir.create(td0); id0 <- run_id_now("final", 30L, NULL, root)
+ok(is.character(id0$code_md5) && nchar(id0$code_md5) == 32 && length(id0$code_files) == 5 && !("git_head" %in% names(id0)), "run_id: md5 of the five files, no git HEAD", names(id0))
 ok(isTRUE(check_resume_guard(td0, id0)) && file.exists(file.path(td0, "run_id.rds")), "resume guard: first start writes run_id.rds")
 saveRDS(1, file.path(td0, "stage1.rds")); ok(isTRUE(check_resume_guard(td0, id0)), "resume guard: same id resumes")
-for (cs in list(list("M_MI", 6L), list("SUBSAMPLE_N", 500L), list("RUN_TAG", "main"), list("git_head", "0000000000000000000000000000000000000000"))) {
+for (cs in list(list("M_MI", 6L), list("SUBSAMPLE_N", 500L), list("RUN_TAG", "main"), list("code_md5", "0123456789abcdef0123456789abcdef"))) {
   id1 <- id0; id1[[cs[[1]]]] <- cs[[2]]; e6 <- catch(check_resume_guard(td0, id1, show_dir = "data-output/final/fits"))
   ok(is.character(e6) && grepl("^Resume guard", e6) && grepl(cs[[1]], e6, fixed = TRUE) && grepl("delete data-output/final/fits", e6, fixed = TRUE), sprintf("resume guard must stop when %s differs", cs[[1]]), e6) }
+# a real edit of each of the five sourced files changes the hash and names the file; a file that 05 does not source does not
+for (f in RUN_CODE_FILES) { cat("# edited\n", file = file.path(root, f), append = TRUE); idc <- run_id_now("final", 30L, NULL, root)
+  e8 <- catch(check_resume_guard(td0, idc, show_dir = "data-output/final/fits")); ok(is.character(e8) && grepl("code_md5", e8) && grepl(f, e8, fixed = TRUE) && grepl("delete data-output/final/fits", e8, fixed = TRUE), sprintf("editing %s must stop the resume and name the file", f), e8)
+  writeLines(paste("# stand-in for", f), file.path(root, f)) }
+writeLines("# a commit elsewhere (WP7 files)", file.path(root, "R", "09_other.R")); ok(identical(run_id_now("final", 30L, NULL, root)$code_md5, id0$code_md5) && isTRUE(check_resume_guard(td0, run_id_now("final", 30L, NULL, root))), "a change in a file 05 does not source must not block the resume")
 td1 <- tempfile("fits"); dir.create(td1); saveRDS(1, file.path(td1, "stage1.rds")); e7 <- catch(check_resume_guard(td1, id0, show_dir = "data-output/final/fits"))
 ok(is.character(e7) && grepl("no run_id.rds", e7) && grepl("delete data-output/final/fits", e7, fixed = TRUE), "resume guard: stage1.rds without run_id stops", e7)
 td2 <- tempfile("fits"); dir.create(td2); saveRDS(1, file.path(td2, "run_meta_final.rds")); ok(is.character(catch(check_resume_guard(td2, id0))), "resume guard: run_meta without run_id stops")
-src05 <- readLines("R/05_fit_inla.R"); ok(any(grepl("check_resume_guard\\(OUT_DIR, RUN_ID", src05)) && any(grepl("git_head = RUN_ID\\$git_head, RUN_TAG = RUN_TAG", src05)) && any(grepl("SUBSAMPLE_N = if", src05)) && any(grepl("M_MI = M_MI", src05)), "05 calls the guard and run_meta records git HEAD, RUN_TAG, SUBSAMPLE_N, M_MI")
-ok(!is.na(id0$git_head) || TRUE, "git head may be NA outside a repository"); cat(sprintf("8f. resume guard: first start writes run_id; same id resumes; a change in M_MI / SUBSAMPLE_N / RUN_TAG / git HEAD, or an old directory without run_id, stops with 'delete ...fits' (git head here: %s)\n\n", substr(id0$git_head, 1, 8)))
+# 07: compares only code_md5 and RUN_TAG against the run_id of 05, writes nothing, a missing run_id is an error
+id07 <- run_id_now("final", NA_integer_, NULL, root); g07 <- function(d, id = id07) check_resume_guard(d, id, show_dir = "data-output/final/fits", only = c("code_md5", "RUN_TAG"), write = FALSE)
+ok(isTRUE(g07(td0)), "07: same code, different M_MI / SUBSAMPLE_N in run_id -> runs")
+cat("# edited\n", file = file.path(root, "R/05a_fit_funs.R"), append = TRUE); e9 <- catch(g07(td0, run_id_now("final", NA_integer_, NULL, root)))
+ok(is.character(e9) && grepl("^Resume guard", e9) && grepl("code_md5", e9) && grepl("05a_fit_funs.R", e9, fixed = TRUE) && grepl("delete data-output/final/fits", e9, fixed = TRUE), "07: stops when the code hash differs", e9)
+writeLines("# stand-in for R/05a_fit_funs.R", file.path(root, "R/05a_fit_funs.R"))
+e10 <- catch(g07(td1)); ok(is.character(e10) && grepl("no run_id.rds", e10), "07: no run_id -> stops", e10); ok(!file.exists(file.path(td1, "run_id.rds")), "07 never writes run_id.rds")
+e11 <- catch(g07(td0, run_id_now("main", NA_integer_, NULL, root))); ok(is.character(e11) && grepl("RUN_TAG", e11), "07: stops when RUN_TAG differs", e11)
+src05 <- readLines("R/05_fit_inla.R"); src07 <- readLines("R/07_redraw.R")
+ok(any(grepl("check_resume_guard\\(OUT_DIR, RUN_ID", src05)) && any(grepl("code_md5 = RUN_ID\\$code_md5", src05)) && any(grepl("SUBSAMPLE_N = if", src05)) && any(grepl("M_MI = M_MI", src05)), "05 calls the guard and run_meta records code md5, RUN_TAG, SUBSAMPLE_N, M_MI")
+ok(any(grepl("check_resume_guard(OUT_DIR, run_id_now", src07, fixed = TRUE)) && any(grepl("write = FALSE", src07, fixed = TRUE)) && which(grepl("check_resume_guard", src07, fixed = TRUE))[1] < which(grepl('readRDS(file.path(OUT_DIR, "stage2.rds"))', src07, fixed = TRUE))[1], "07 calls the check before it reads any fit")
+real <- code_md5_now("."); ok(nchar(real$code_md5) == 32, "the real five files hash"); cat(sprintf("8f. resume guard (05) and code check (07): first start writes run_id; same id resumes; M_MI / SUBSAMPLE_N / RUN_TAG / code md5 each stop (05); any of the five files named when edited; a file outside the five does not block; 07 stops on a code or tag difference or a missing run_id and never writes (real code md5 here: %s)\n\n", real$code_md5))
 
 # ---- 7. run_stage1 / run_stage2 / run_one_imputation plumbing with stubbed fits -----------------------------------------------------------------------
 fit_rows <- function(rows, inp, fit_fun, only_k = NULL) { ks <- if (is.null(only_k)) integer(0) else as.integer(only_k); list(models = list(), n_events = integer(0), data = list(), ks = integer(0)) }

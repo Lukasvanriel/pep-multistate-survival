@@ -790,25 +790,40 @@ pool_all <- function(raw, exclude_flagged = FALSE, sd_min = SD_MIN) {
   out[]
 }
 
-# ---- WP5 review: resume guard of 05 ---------------------------------------------------------------------------------------------------------
-# A fits directory is only resumed by the run that started it: git HEAD, M_MI, SUBSAMPLE_N and RUN_TAG are written to <out_dir>/run_id.rds on the first start;
-# a later start that differs in any of them (or finds stage1.rds / run_meta without a run_id) stops. No automatic deletion.
-run_id_now <- function(tag, m_mi, subsample_n, root = ".") {
-  gh <- tryCatch(suppressWarnings(system2("git", c("-C", root, "rev-parse", "HEAD"), stdout = TRUE, stderr = FALSE))[1L], error = function(e) NA_character_)
-  if (length(gh) != 1L || is.na(gh) || !nzchar(gh)) gh <- NA_character_
-  list(git_head = gh, M_MI = as.integer(m_mi), SUBSAMPLE_N = if (is.null(subsample_n)) NA_integer_ else as.integer(subsample_n), RUN_TAG = as.character(tag))
+# ---- WP5 review: resume guard of 05 (and the code check of 07) --------------------------------------------------------------------------------
+# A fits directory is only resumed by the run that started it: md5 of the files 05 sources (config.R, covariate_spec.R, 04b_build_rows.R, 05a_fit_funs.R,
+# 05_fit_inla.R), M_MI, SUBSAMPLE_N and RUN_TAG are written to <out_dir>/run_id.rds on the first start (git HEAD is deliberately not used: commits to other
+# files must not block a resume). A later start that differs in any of them (or finds stage1.rds / run_meta without a run_id) stops. No automatic deletion.
+RUN_CODE_FILES <- c("R/config.R", "R/covariate_spec.R", "R/04b_build_rows.R", "R/05a_fit_funs.R", "R/05_fit_inla.R")
+code_md5_now <- function(root = ".", files = RUN_CODE_FILES) {
+  h <- unname(tools::md5sum(file.path(root, files))); names(h) <- files
+  if (anyNA(h)) stop("code hash: file(s) not found: ", paste(files[is.na(h)], collapse = ", "), call. = FALSE)
+  tf <- tempfile(); on.exit(unlink(tf)); writeLines(paste(files, h), tf)
+  list(code_md5 = unname(tools::md5sum(tf)), code_files = h)
 }
-check_resume_guard <- function(out_dir, id, show_dir = out_dir) {
-  path <- file.path(out_dir, "run_id.rds")
+run_id_now <- function(tag, m_mi, subsample_n, root = ".") {
+  cm <- code_md5_now(root)
+  list(code_md5 = cm$code_md5, M_MI = as.integer(m_mi), SUBSAMPLE_N = if (is.null(subsample_n)) NA_integer_ else as.integer(subsample_n),
+       RUN_TAG = as.character(tag), code_files = cm$code_files)
+}
+# only: the fields that are compared (05: all four; 07: code_md5 and RUN_TAG). write = FALSE (07): a missing run_id is an error, nothing is written.
+check_resume_guard <- function(out_dir, id, show_dir = out_dir, only = c("code_md5", "M_MI", "SUBSAMPLE_N", "RUN_TAG"), write = TRUE) {
+  path <- file.path(out_dir, "run_id.rds"); only <- intersect(only, names(id))
   has_prev <- file.exists(file.path(out_dir, "stage1.rds")) || length(Sys.glob(file.path(out_dir, "run_meta_*.rds"))) > 0L
-  del <- sprintf("delete %s (rm -rf) and start again", show_dir)
+  del <- sprintf("delete %s (rm -rf) and start again", show_dir); fm <- function(x) vapply(x, function(v) paste(format(v), collapse = ","), "")
   if (file.exists(path)) {
-    prev <- readRDS(path); dif <- names(id)[!vapply(names(id), function(n) identical(prev[[n]], id[[n]]), logical(1))]
-    if (length(dif)) stop(sprintf("Resume guard: %s was started by a run that differs in %s (started: %s; now: %s). Not resuming: %s.", show_dir, paste(dif, collapse = ", "),
-                                  paste(sprintf("%s=%s", dif, vapply(prev[dif], format, "")), collapse = ", "), paste(sprintf("%s=%s", dif, vapply(id[dif], format, "")), collapse = ", "), del), call. = FALSE)
-    cat("Resume guard: run_id equal to the one that started this directory (", paste(sprintf("%s=%s", names(id), vapply(id, format, "")), collapse = ", "), ")\n", sep = "")
+    prev <- readRDS(path); dif <- only[!vapply(only, function(n) identical(prev[[n]], id[[n]]), logical(1))]
+    if (length(dif)) {
+      fl <- if ("code_md5" %in% dif && !is.null(prev$code_files) && !is.null(id$code_files)) {
+        d <- names(id$code_files)[!(names(id$code_files) %in% names(prev$code_files)) | prev$code_files[names(id$code_files)] != id$code_files]
+        sprintf(" [changed files: %s]", paste(d, collapse = ", ")) } else ""
+      stop(sprintf("Resume guard: %s was started by a run that differs in %s (started: %s; now: %s)%s. Not resuming: %s.", show_dir, paste(dif, collapse = ", "),
+                   paste(sprintf("%s=%s", dif, fm(prev[dif])), collapse = ", "), paste(sprintf("%s=%s", dif, fm(id[dif])), collapse = ", "), fl, del), call. = FALSE) }
+    cat("Resume guard: run_id equal to the one that started this directory (", paste(sprintf("%s=%s", only, fm(id[only])), collapse = ", "), ")\n", sep = "")
+  } else if (!write) {
+    stop(sprintf("Resume guard: %s holds no run_id.rds (05 writes it at its first start), so the code that produced the fits is unknown. Not continuing: %s.", show_dir, del), call. = FALSE)
   } else if (has_prev) {
-    stop(sprintf("Resume guard: %s holds stage1.rds / run_meta but no run_id.rds (started by an earlier version of 05); its git HEAD, M_MI, SUBSAMPLE_N and RUN_TAG are unknown. Not resuming: %s.", show_dir, del), call. = FALSE)
+    stop(sprintf("Resume guard: %s holds stage1.rds / run_meta but no run_id.rds (started by an earlier version of 05); its code hash, M_MI, SUBSAMPLE_N and RUN_TAG are unknown. Not resuming: %s.", show_dir, del), call. = FALSE)
   } else saveRDS(id, path)
   invisible(TRUE)
 }
