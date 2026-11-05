@@ -86,7 +86,7 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] 05 -> 07_redraw -> 08 done
 - [ ] Watch: cap_check (caveat list comes from here), failure counts of regen->sugar_maple and other_temperate->yellow_birch, P1 fallbacks
 
-## WP7 -- D1-D8 (09, 12, 08, sensitivity/10, 11, tests/08f)   Commit: 4740560 (09, synthetic data), 7afd526 (12, sensitivity/10, 11, tests/08f), docs: see log   Review: [ ]
+## WP7 -- D1-D8 (09, 12, 08, sensitivity/10, 11, tests/08f)   Commit: 4740560 (09, synthetic data), 7afd526 (12, sensitivity/10, 11, tests/08f), docs: 15de660   Review: [ ]
 - [ ] D1 HR = exp(beta); no alpha in the delta method; alpha_cov columns out of the HR table  -- *code done (09: q = c'beta, u = c'V_bb c from the stored covariance; alpha_cov columns dropped, user decision Q7); cloud, synthetic fits (08 -> 09): printed check max |pooled log HR per SD CMI - pooled beta| 5e-16; the check on the real 08 output is the Mac run*
 - [ ] D2 tau grid 1/10/30/60 y for every transition; range columns; _tsd_1_vs_10y, _tsd_10_vs_30y, _tsd_coef  -- *code done; synthetic: every transition x level has the four tau rows (14 fire, 28 pest, 69 light, 68 heavy), range columns filled; contrast values equal an independent calculation from the pooled coefficients. The range definition, applied to the real visit_intervals.rds, reproduces the plan (179 pairs; light < 60 y in 45; fire, pest, heavy reach 60 y; tau = 1 below the 5th percentile in all 179). Real 09 output: Mac*
 - [ ] D3 alpha_report_<tag>.csv  -- *code done (columns in the log); synthetic: 90 rows, alpha_log_pooled equals pooled_final est_from_log (stopifnot in 09); cap_flag = share_maxH_map_gt_cap > 0 plus shares and the three medians (user decision Q6)*
