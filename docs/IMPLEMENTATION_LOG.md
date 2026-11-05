@@ -286,3 +286,60 @@ Template:
 - Effect on the pipeline: none expected (A1 guarantees no NA in the climate / soil columns, and the model matrices contain no other NA). If a run now stops here, the NA is real: it would previously have switched off every exit of that plot or interval.
 - Mac checks of WP4 unchanged and still waiting for the climate import (see the "review fixes" entry).
 - Hash of "WP4: lambda_matrix NA stop": be794e5 (recorded in a docs-only follow-up commit).
+
+## WP5 -- C2, C3 + first test runs (2026-11-04) -- CODE DONE, MAC RUNS PENDING
+- Commit: "WP5: C2, C3, first test runs" = HASH1 (hash recorded in a docs-only follow-up commit). Author Lukas Van Riel.
+- User decisions before the work (2026-11-04): (1) five exit_source labels: `rule`, `draw` (closed form), `uniform` (no usable fit), `uniform_nonfinite` (usable fit, closed form not finite: H(a), H(b), H(b)-H(a) > 0 or T not finite), `moment` (Stage 2 point), `midpoint` (Stage 1; Stage 2 where the fit is unusable);
+  (2) Stage 1 and Stage 2 also return a per-event table; `mi_diag` keeps `p2_events`, `p2_midpoint`, adds `p2_rule`, `p2_draw`, `p2_uniform`, `p2_uniform_nonfinite`, `p2_rule_at_end`; (3) non-finite draw -> uniform on (a, b) with its own label, counted per transition and printed in every stage / imputation;
+  (4) rule for every X->regen event with D_heavy (kept or not, any theta), `XREGEN_EXIT_RULE = FALSE` off everywhere, stop if the clamp moves a rule exit by > 1e-9; (5) one runif(1) per event, also for rule events; (6) the five C3 test cases, bound 0.01 unchanged; (7) `stage1_rows(inp)`;
+  (8) environment overrides in 05 (`PEP_SUBSAMPLE_N`, `PEP_M_MI`), SUBSAMPLE_N and M_MI in run_meta, WP6 starts with `data-output/final/fits` deleted; (9) real-data check script with per-label and per-transition counts.
+- Files / functions changed:
+  - `R/05a_fit_funs.R`: `P2_SOURCES`, `p2_diag_init`, `p2_check_rule_inputs` (stops at construction if `inp$iv` has no `D_heavy`), `p2_rule_T` (T = t_start[r] + (D_heavy - year_start[r]) - E, E = t_end[r] - b_dur; clamp [a_dur, b_dur]; stop if moved > 1e-9; counts rule exits at the end visit), `make_p2_stage1`, `make_p2_moment` (rule first, then the old moment/midpoint logic unchanged),
+    `p2_draw_closed`, `make_p2_draw`, `p2_event_table`, `p2_source_counts`, `p2_source_line`, `p2_diag_cols`, `stage1_rows` (Stage 1 build in one place; `run_stage1` calls it, so does the new test). `run_stage1` / `run_stage2` return `p2` (per-event table), `p2_src` (counts per transition and source), `p2_rule_at_end`;
+    `run_one_imputation` uses `make_p2_draw`, `extras$p2` has `exit_source`, `mi_diag` has the new columns, the result has `p2_src`.
+  - `R/05_fit_inla.R`: env overrides; prints `SUBSAMPLE_N | M_MI | N_WORKERS`; prints P2 exits by source for Stage 1, Stage 2 and every imputation; writes `p2_source_stages_<tag>.csv` (stage, transition, exit_source, n) and `p2_source_<tag>.csv` (per imputation); `run_meta` also records `SUBSAMPLE_N` (NA = all plots; M_MI was already in it).
+  - `R/07_redraw.R`: the same per-imputation print and `p2_source_redraw_<tag>.csv`.
+  - New tests: `R/tests/wp5_C23_check.R` (cloud), `R/tests/wp5_recount_stage1.R` (Mac), `R/tests/wp5_C23_real_check.R` (Mac, read-only).
+  - Not touched: P1 (C1/C5), D items, sensitivity/, 04, 04b, covariate_spec, config.R.
+- Checks run (cloud, R 4.3.3, data.table, no INLA, synthetic tables; `Rscript R/tests/wp5_C23_check.R` -> ALL CHECKS PASSED):
+  | check | result |
+  |---|---|
+  | C3 unit test, 1e5 draws, KS vs closed-form truncated Weibull CDF (seeds 20261111-15) | p = 0.181 / 0.198 / 0.451 / 0.465 / 0.918 (case 5: H(a) = 800); all draws in [a, b]; bound 0.01 unchanged |
+  | negative control: same draws vs the CDF with alpha +2% | p = 3e-4 (the test can fail) |
+  | uniform fallback vs Uniform(a, b), 1e5 | KS p = 0.336 |
+  | rule date identical in Stage 1 / moment / draw; ok, failed and non-kept transitions; E = 40, 30, 12.5 | pass; X->regen only; D = year_end -> T = b_dur and counted; D outside the interval stops |
+  | one runif per event; second event identical with rule on / off | pass |
+  | no D_heavy: `make_p2_moment` vs the pre-WP5 function (copied literally in the test) | identical on 460 events; `stage1_rows` rows identical to `build_rows(p2_midpoint)` (4,980 rows) |
+  | synthetic table (400 plots, 460 changes, 45 X->regen with D_heavy) | 45 rule exits, max abs(exit - rule date) 2.3e-13; recount_events OK; plumbing of run_stage1 / run_stage2 / run_one_imputation with stubbed fits: sources, diag columns, extras$p2, reproducible with the seed, rule exits identical across seeds, others vary |
+  Also unchanged and passing: `wp4_C1_check.R`, `wp4_C5_toy.R`, `wp3_B4_check.R` (mock). `wp5_recount_stage1.R` and `wp5_C23_real_check.R` ran on a synthetic table / 5 stub imputations (ALL CHECKS PASSED).
+  Notes: R's `ks.test` warns "ties" (99,997-100,000 unique values of 1e5: runif has 32-bit resolution, about one collision expected); the p-values are unaffected in practice. In `moment` mode a moment match that falls back to the midpoint inside `moment_match_weibull_naive` is still labelled `moment` (not tracked, as before).
+- NOT verified (needs the Mac / INLA / real data): the real counts (1,537 rule exits), the real fits, run time, `p2_source` outputs, the real spread over imputations.
+- Deviations from the plan (each asked and approved by the user 2026-11-04): the five labels (plan has three) and the `uniform_nonfinite` case; per-event tables and counts also for Stage 1 / 2; environment overrides in 05.
+- Open issues / watch:
+  - The plan's check "mean of the draws close to the moment point" is printed, not tested (no threshold; Stage 2 uses theta_seed, the draws use theta_m).
+  - `wp5_recount_stage1.R` checks counts, not exit times (C2 does not change counts); it does check that `stage1_rows` runs on the full data with the C2 rule.
+  - Checkpoints of the WP5 runs are not reused: WP6 starts with `data-output/final/fits` deleted (and `fits_subsample`).
+
+### Mac runs, in this order (project root; every open Mac item of WP1, WP2, WP4, WP5)
+| # | Command | Expect |
+|---|---|---|
+| 1 | `Rscript R/03c_build_climate_covariates.R` | WP1. Downloads/extracts the missing plot-years (zips are in place); stops unless every visit window is full; writes `*.pre_A1.rds` backups once; no NA |
+| 2 | `Rscript R/tests/wp1_A1_check.R` | Part A: 0 NA, 0 differing visits outside the 5 plots, every window full; FLAGS (not stops) for the 5 plots and the pair 7209002301 / 7209002302 |
+| 3 | `Rscript R/03z_combine_covariates.R` | NA counts 0 for gdd_3, cmi_gs, soil_pc1; `combined_covariates.pre_A1.rds` written once |
+| 4 | `Rscript R/tests/wp1_A1_check.R` | Now also part B: identical to the pre-A1 table outside the 5 plots, 0 NA |
+| 5 | `Rscript R/04_prepare_inla.R` | 11,286 plots / 36,251 intervals / 8,770 changes; NA counts 0 (incl. `plot_info first-visit columns`); fv flags equal interval-1 flags; A9: 1,537 X->regen with D_heavy (1,223 / 315); 69 harvest terms, fire 14, pest 28; writes `data/tables/final/` |
+| 6 | `Rscript R/04x_exclusion_flow.R` | Matches the 04 numbers |
+| 7 | `Rscript R/tests/04c_check_rows.R` | WP2: ALL CHECKS PASSED (only `regen->sugar_maple` without z_gdd_3; `other_temperate->yellow_birch` without gdd_x_harv_heavy / tsd_harv_heavy; transitions, events, fire, pest identical to `data/tables/main`) |
+| 8 | `Rscript R/tests/wp4_C1_check.R real` | WP4: ALL CHECKS PASSED; real part: onsets = W_j - TSD, X1 = scaled first-visit values (300 plots), pieces contiguous (300 flagged plots); table of flagged-but-off-at-interval-1 plots |
+| 9 | `Rscript R/tests/wp5_C23_check.R` | optional (ran in the cloud): ALL CHECKS PASSED, KS p's as in the table above (Mac RNG gives the same streams) |
+| 10 | `Rscript R/tests/wp5_recount_stage1.R` | "recount_events(): OK, N kept transitions" (N = the kept count of 04), X->regen with D_heavy 1,537 = rule exits, Stage 1 exits: rule 1,537, rest midpoint; ALL CHECKS PASSED. Any mismatch stops: report it |
+| 11 | `mkdir -p data-output/final && PEP_SUBSAMPLE_N=500 PEP_M_MI=6 Rscript R/05_fit_inla.R 2>&1 \| tee data-output/final/smoke_console.log` | Code runs to the end (fits are sparse, results meaningless): header `SUBSAMPLE_N 500 \| M_MI 6`, "recount_events(): skipped", P2 exits by source per stage and per imputation, 6 imputations, no `mi_errors` log. Writes to `data-output/final/fits_subsample/` |
+| 12 | `Rscript -e 'm <- readRDS("data-output/final/fits_subsample/run_meta_final.rds"); print(m$inla_args$control.family[[1]]$variant); str(m$inla_args$control.fixed); print(unlist(m[c("WEIBULL_VARIANT","COEF_PRIOR_SD","TSD_FORM","MIN_EVENTS","XREGEN_EXIT_RULE","SUBSAMPLE_N","M_MI")]))'` | variant 0; control.fixed mean 0, prec 0.04, mean.intercept 0, prec.intercept 0; switches 0 / 5 / log1p / 15 / TRUE; SUBSAMPLE_N 500, M_MI 6 (B1, B2) |
+| 13 | `rm -rf data-output/final/fits_subsample` and, if present, `rm -rf data-output/final/fits` | clean start for the first batch |
+| 14 | `PEP_M_MI=6 Rscript R/05_fit_inla.R 2>&1 \| tee data-output/final/wp5_batch.log` | Full data, Stage 1 + Stage 2 + one batch (m1-6). Stage 1: "recount_events(): OK"; P2 exits by source (rule 1,537 in every stage and imputation; Stage 1 midpoint, Stage 2 moment / midpoint, imputations draw / uniform / uniform_nonfinite); P1 fallbacks by first state per imputation; run time per imputation |
+| 15 | `Rscript R/tests/wp5_C23_real_check.R 5` | ALL CHECKS PASSED: 1,537 rule exits per imputation, each = D_heavy, 0 non-rule events with zero spread; tables of sources per label and per transition; uniform_nonfinite per transition (should be none or few: look at it); draw-vs-moment differences (information) |
+| 16 | `Rscript R/tests/wp4_C5_shift.R 1 1000` | Pass = corrected entries earlier on average (mean old - corrected > 0); size vs 2.9-3.8 y for information |
+| 17 | `Rscript -e 'library(data.table); r <- fread("data-output/final/fits/mi_raw_final.csv"); print(r[parameter=="alpha", .(fits=.N, failed=sum(fit_error %in% TRUE), na_maxH_inla=sum(is.na(maxH_inla)), na_maxH_map=sum(is.na(maxH_map)), na_z_map_max=sum(is.na(z_map_max)), na_z_map_alpha=sum(is.na(z_map_alpha)), na_z_map_intercept=sum(is.na(z_map_intercept))), by=m])'` | B6 columns filled: NA counts equal the number of failed fits (NA only for a failed fit) |
+| 18 | `cat data-output/final/fits/p1_fallback_by_state_final.csv` | P1 fallbacks by first state, vs the main run's 124-196 in total (watch the 681 unharvested sugar-maple-first plots) |
+| 19 | `rm -rf data-output/final/fits data-output/final/fits_subsample` | WP6 starts clean: no WP5 checkpoint (stage1.rds, stage2.rds, extras, mi_raw) is reused. Then WP6: `Rscript R/05_fit_inla.R` (full, M_MI 30) |
+| 20 | after the full WP6 05: `Rscript R/07_redraw.R 2>&1 \| tee data-output/final/redraw_console.log` then `grep -n -A95 "Screen reference table" data-output/final/redraw_console.log` | B5: all 90 kept transitions printed (k, icpt_ref, icpt_sd_ref, n_ref, label) before the first "Batch m=" line. (Depends on the full 05 run, so it belongs to WP6.) |

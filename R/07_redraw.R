@@ -54,6 +54,7 @@ cat("Transitions whose reference rests on < 10 fits:\n"); print(ref_tab[n_ref < 
 raw_path  <- file.path(OUT_DIR, sprintf("mi_raw_redraw_%s.csv", RUN_TAG)); diag_path <- file.path(OUT_DIR, sprintf("mi_diag_redraw_%s.csv", RUN_TAG))
 prog_path <- file.path(OUT_DIR, sprintf("redraw_progress_%s.csv", RUN_TAG))
 state_path <- file.path(OUT_DIR, sprintf("p1_fallback_by_state_redraw_%s.csv", RUN_TAG))
+p2src_path <- file.path(OUT_DIR, sprintf("p2_source_redraw_%s.csv", RUN_TAG))
 all_raw <- function() if (file.exists(raw_path)) rbind(raw0, fread(raw_path), fill = TRUE) else raw0
 err_path  <- file.path(OUT_DIR, sprintf("redraw_runerrors_%s.csv", RUN_TAG))   # candidates whose whole imputation failed to run (counted as tried)
 tried   <- function() c(if (file.exists(diag_path)) fread(diag_path)$m else integer(0), if (file.exists(err_path)) fread(err_path)$m else integer(0))
@@ -78,6 +79,8 @@ repeat {
     saveRDS(r$extras, file.path(OUT_DIR, sprintf("extras_%s_m%02d.rds", RUN_TAG, r$diag$m)))
     fwrite(r$res, raw_path, append = file.exists(raw_path)); fwrite(r$diag, diag_path, append = file.exists(diag_path))
     fwrite(r$p1_state, state_path, append = file.exists(state_path))     # WP4: P1 fallbacks by first state, one block per imputation
+    fwrite(r$p2_src, p2src_path, append = file.exists(p2src_path))      # WP5: exit_source counts per transition
+    cat(sprintf("  m=%d: P2 exits by source: %s\n", r$diag$m, p2_source_line(r$p2_src)))
     cat(sprintf("  m=%d: P1 fallbacks %d of %d plots; by first state (n_fallback / n_plots):", r$diag$m, sum(r$p1_state$n_fallback), sum(r$p1_state$n_plots)),
         paste(sprintf("%s %d/%d", r$p1_state$first_state, r$p1_state$n_fallback, r$p1_state$n_plots), collapse = "; "), "\n") }
   cat(sprintf("  done (%.0f s elapsed)\n", proc.time()["elapsed"] - t0))

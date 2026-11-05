@@ -20,10 +20,11 @@ source(here::here("R", "config.R"))   # RUN_TAG, TABLE_DIR, FIT_DIR, ALPHA_PRIOR
 INLA::inla.setOption(num.threads = "1:1")   # T6: one thread per INLA call (also set in every fit call)
 
 # ---- config ------------------------------------------------------------------
-SUBSAMPLE_N   <- NULL          # e.g. 500 for a smoke test (fits will be sparse); NULL = all plots
+# Environment overrides (WP5; defaults unchanged): PEP_SUBSAMPLE_N=500 (smoke test, fits will be sparse; NULL = all plots), PEP_M_MI=6 (one batch of imputations).
+SUBSAMPLE_N   <- if (nzchar(Sys.getenv("PEP_SUBSAMPLE_N"))) as.integer(Sys.getenv("PEP_SUBSAMPLE_N")) else NULL
 SEED          <- 2026L
 N_WORKERS     <- 6L            # MI loop workers; Stage 2 P1 uses the same number
-M_MI          <- 30L           # simulation value
+M_MI          <- if (nzchar(Sys.getenv("PEP_M_MI"))) as.integer(Sys.getenv("PEP_M_MI")) else 30L   # simulation value
 SIM_M         <- 200L          # P1 candidate paths per plot (simulation value)
 # RUN_TAG is set in R/config.R (2026-10-24: "main"; "inttest" = annual-CMI run, in data-output/inttest/fits/)
 SD_MIN <- 1e-3                 # alpha SD below this = near-degenerate fit: screened, its fitting data are saved
@@ -35,6 +36,7 @@ dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 source(here("R", "covariate_spec.R")); source(here("R", "04b_build_rows.R")); source(here("R", "05a_fit_funs.R"))
 RNGkind("L'Ecuyer-CMRG"); set.seed(SEED)
 fit_fun <- fit_inla_models_pc
+cat(sprintf("SUBSAMPLE_N %s | M_MI %d | N_WORKERS %d\n", if (is.null(SUBSAMPLE_N)) "NULL (all plots)" else SUBSAMPLE_N, M_MI, N_WORKERS))
 cat(sprintf("INLA fits: Weibull variant %d, N(0, %g^2) on coefficients, alpha prior pc.alphaw(%s), one thread per fit\n", WEIBULL_VARIANT, COEF_PRIOR_SD, format(ALPHA_PRIOR)))
 
 inp <- prepare_fit_inputs(TABLE_DIR, subsample_n = SUBSAMPLE_N, seed = SEED)
@@ -52,6 +54,9 @@ if (file.exists(f1)) { s1 <- readRDS(f1); cat("Stage 1: loaded checkpoint\n") } 
   t0 <- proc.time()["elapsed"]; s1 <- run_stage1(inp, fit_fun); saveRDS(s1, f1)
   cat(sprintf("Stage 1 done (%.0f s), floored segments %d\n", proc.time()["elapsed"] - t0, s1$n_floored))
 }
+p2_stage_path <- file.path(OUT_DIR, sprintf("p2_source_stages_%s.csv", RUN_TAG))
+cat("  P2 exits by source (Stage 1):", p2_source_line(s1$p2_src), sprintf("| rule exits at the end visit %d\n", s1$p2_rule_at_end))
+fwrite(cbind(stage = "stage1", s1$p2_src), p2_stage_path)
 report_fits(s1$tidy, s1$theta, s1$n_events, "Stage 1")
 if (any(!s1$theta$ok)) { cat("  transitions not ok (hazard 0 in P1, midpoint in P2):\n"); print(inp$td$label[!s1$theta$ok]) }
 
@@ -64,6 +69,8 @@ if (file.exists(f2)) { s2 <- readRDS(f2); cat("Stage 2: loaded checkpoint\n") } 
 report_fits(s2$tidy, s2$theta, s2$n_events, "Stage 2")
 cat(sprintf("  P1: %d of %d plots without a usable candidate -> entry W_j/2 (marked)\n", sum(s2$p1$fallback), nrow(s2$p1)))
 cat(sprintf("  P2: %d exits, %d by midpoint (dropped / not-ok transition)\n", s2$p2_event, s2$p2_midpoint))
+cat("  P2 exits by source (Stage 2):", p2_source_line(s2$p2_src), sprintf("| rule exits at the end visit %d\n", s2$p2_rule_at_end))
+fwrite(rbind(cbind(stage = "stage1", s1$p2_src), cbind(stage = "stage2", s2$p2_src)), p2_stage_path)
 fb <- cbind(inp$p1[, .(id_pe, W_j, first_state)], s2$p1[, .(n_cand, fallback)])[fallback == TRUE]
 fwrite(fb, file.path(OUT_DIR, "p1_fallback_plots_stage2.csv"))
 cat("  P1 fallbacks by first state (Stage 2):\n"); print(p1_fallback_by_state(s2$p1, inp))
@@ -79,11 +86,13 @@ if (!file.exists(meta_path)) saveRDS(list(time = Sys.time(), SEED = SEED, M_MI =
   COV_CONT = COV_CONT, inla_version = as.character(utils::packageVersion("INLA")), session = utils::sessionInfo(),
   inla_args = s2$models[[k_ok]]$.args[c("family", "control.fixed", "control.family", "control.inla", "control.compute", "control.mode")],
   fit_inla_models_src = deparse(fit_fun), ALPHA_PRIOR = ALPHA_PRIOR,
+  SUBSAMPLE_N = if (is.null(SUBSAMPLE_N)) NA_integer_ else SUBSAMPLE_N, N_WORKERS = N_WORKERS,
   WEIBULL_VARIANT = WEIBULL_VARIANT, COEF_PRIOR_SD = COEF_PRIOR_SD, TSD_FORM = TSD_FORM, MIN_EVENTS = MIN_EVENTS, XREGEN_EXIT_RULE = XREGEN_EXIT_RULE, rhs = inp$rhs, td = inp$td), meta_path)
 
 # ---- MI loop (resumable: finished m are skipped) -------------------------------
 raw_path  <- file.path(OUT_DIR, sprintf("mi_raw_%s.csv", RUN_TAG)); diag_path <- file.path(OUT_DIR, sprintf("mi_diag_%s.csv", RUN_TAG)); err_path <- file.path(OUT_DIR, sprintf("mi_errors_%s.log", RUN_TAG))
 state_path <- file.path(OUT_DIR, sprintf("p1_fallback_by_state_%s.csv", RUN_TAG))
+p2src_path <- file.path(OUT_DIR, sprintf("p2_source_%s.csv", RUN_TAG))
 done <- if (file.exists(diag_path)) fread(diag_path)$m else integer(0)
 todo <- setdiff(seq_len(M_MI), done)
 cat(sprintf("MI loop: %d done, %d to do (%d workers)\n", length(done), length(todo), N_WORKERS))
@@ -101,6 +110,8 @@ for (batch in split(todo, ceiling(seq_along(todo) / N_WORKERS))) {
     fwrite(r$res,  raw_path,  append = file.exists(raw_path))
     fwrite(r$diag, diag_path, append = file.exists(diag_path))
     fwrite(r$p1_state, state_path, append = file.exists(state_path))     # WP4: P1 fallbacks by first state, one block per imputation
+    fwrite(r$p2_src, p2src_path, append = file.exists(p2src_path))      # WP5: exit_source counts per transition, one block per imputation
+    cat(sprintf("  m=%d: P2 exits by source: %s\n", r$diag$m, p2_source_line(r$p2_src)))
     cat(sprintf("  m=%d: P1 fallbacks %d of %d plots; by first state (n_fallback / n_plots):", r$diag$m, sum(r$p1_state$n_fallback), sum(r$p1_state$n_plots)),
         paste(sprintf("%s %d/%d", r$p1_state$first_state, r$p1_state$n_fallback, r$p1_state$n_plots), collapse = "; "), "\n")
   }

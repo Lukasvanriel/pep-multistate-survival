@@ -9,7 +9,7 @@
 #     own term set (zeros in beta for terms a transition does not have)
 #   * P1 weighting bracket from the real visits (no hidden-hop flag, no oracle)
 #   * P1 finds no candidate  -> entry W_j/2, flagged (the simulation dropped the plot)
-#   * transition with a failed fit (theta NA) -> hazard 0 in P1, midpoint in P2, counted
+#   * transition with a failed fit (theta NA) -> hazard 0 in P1; P2: midpoint (Stage 1/2) or uniform draw (imputations), counted (WP5)
 # Units (WP3, B3/B4): the models are fitted as Weibull VARIANT 0 on the decade scale, S(t) = exp(-e^eta (t/10)^alpha). The INLA
 # intercept is kept on that scale everywhere (tidy_fit, mi_raw, screen, pooling). P1 and P2 work in the variant-1 form in YEARS,
 # S(t) = exp(-(lambda1 t)^alpha); theta (extract_theta, draw_theta_m) holds the CONVERTED values (v0_to_p1p2) plus the raw variant-0 values.
@@ -385,8 +385,51 @@ p1_fallback_by_state <- function(p1, inp, m = NA_integer_) {
 }
 
 # ------------------------------------------------------------------------------
-# P2: moment-matched exit (copied unchanged from p2_imputation_strategies.R)
+# P2 (moment_match_weibull_naive copied unchanged from p2_imputation_strategies.R; WP5: rule C2, draw C3)
 # ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# WP5: C2 (exit at the heavy disturbance for X->regen) and C3 (drawn exit). Plan: docs/PIPELINE_FIX_PLAN_2026-11-03.md, C2 / C3.
+# All P2 functions below have the build_rows() signature p2_fun(a_dur, b_dur, from, to, r); r = row of inp$iv (the event interval).
+# exit_source (one value per event): "rule" (C2), "draw" (closed-form C3 draw), "uniform" (no usable fit, uniform draw on (a, b)),
+# "uniform_nonfinite" (usable fit but the closed form is not finite: uniform draw on (a, b), user decision 2026-11-04), "moment" (Stage 2 point),
+# "midpoint" (Stage 1; Stage 2 where the fit is unusable). `diag` is an environment: n_event, n_midpoint (kept names), n_rule_at_end, src[r].
+# ------------------------------------------------------------------------------
+P2_SOURCES <- c("rule", "draw", "uniform", "uniform_nonfinite", "moment", "midpoint")
+
+p2_diag_init <- function(inp, diag) {
+  diag$n_event <- 0L; diag$n_midpoint <- 0L; diag$n_rule_at_end <- 0L
+  diag$src <- rep(NA_character_, nrow(inp$iv)); diag
+}
+p2_check_rule_inputs <- function(inp) {
+  if (isTRUE(XREGEN_EXIT_RULE) && !all(c("D_heavy", "year_start", "t_start", "t_end") %in% names(inp$iv)))
+    stop("C2: inp$iv has no D_heavy / year_start column (rerun R/04_prepare_inla.R, WP2 A9)")
+}
+# C2: exit time (duration since entry) of an X->regen event whose interval has a heavy-disturbance date, else NA.
+#   T = t_start[r] + (D_heavy - year_start[r]) - E, with E = t_end[r] - b_dur (b_dur = t_end - E); clamped to [a_dur, b_dur].
+#   A clamp that moves T by more than 1e-9 stops (it would mean A9 or the entry logic is broken). Applies to every theta (also failed fits, non-kept transitions).
+p2_rule_T <- function(inp, diag, a_dur, b_dur, to, r) {
+  if (!isTRUE(XREGEN_EXIT_RULE) || to != inp$states[inp$start_idx]) return(NA_real_)
+  D <- inp$iv$D_heavy[r]; if (is.na(D)) return(NA_real_)
+  E <- inp$iv$t_end[r] - b_dur
+  Tr <- inp$iv$t_start[r] + (D - inp$iv$year_start[r]) - E
+  Tc <- min(max(Tr, a_dur), b_dur)
+  if (abs(Tc - Tr) > 1e-9) stop(sprintf("C2: the clamp moves the rule exit of plot %s interval %s by %.3g y (rule T %.6f, bracket [%.6f, %.6f])",
+                                        inp$iv$id_pe[r], inp$iv$interval[r], Tc - Tr, Tr, a_dur, b_dur))
+  if (abs(Tc - b_dur) < 1e-9) diag$n_rule_at_end <- diag$n_rule_at_end + 1L
+  Tc
+}
+p2_note <- function(diag, r, src) { diag$n_event <- diag$n_event + 1L; diag$src[r] <- src; if (src == "midpoint") diag$n_midpoint <- diag$n_midpoint + 1L }
+
+# Stage 1: rule date where the interval has D_heavy, midpoint otherwise (the rule needs no fitted parameters and Stage 1 seeds Stage 2).
+make_p2_stage1 <- function(inp, diag = new.env()) {
+  p2_diag_init(inp, diag); p2_check_rule_inputs(inp)
+  function(a_dur, b_dur, from, to, r) {
+    Tr <- p2_rule_T(inp, diag, a_dur, b_dur, to, r)
+    if (!is.na(Tr)) { p2_note(diag, r, "rule"); return(Tr) }
+    p2_note(diag, r, "midpoint"); (a_dur + b_dur) / 2
+  }
+}
+
 moment_match_weibull_naive <- function(a, b, alpha, lambda) {
   S_a <- exp(-(lambda * a)^alpha)
   S_b <- exp(-(lambda * b)^alpha)
@@ -398,17 +441,75 @@ moment_match_weibull_naive <- function(a, b, alpha, lambda) {
   max(a, min(b, e_t_alpha^(1 / alpha)))
 }
 
-# p2_fun for build_rows(): moment match for kept transitions with an ok fit,
-# midpoint otherwise. `diag` (an environment) counts both cases.
+# Stage 2 (the point for the seed models, C3 point 1): rule first (C2), then the moment-matched point for kept transitions with an ok fit,
+# midpoint otherwise. A moment match that falls back to the midpoint inside moment_match_weibull_naive() is still labelled "moment" (not tracked).
 make_p2_moment <- function(theta, inp, diag = new.env()) {
-  diag$n_event <- 0L; diag$n_midpoint <- 0L
+  p2_diag_init(inp, diag); p2_check_rule_inputs(inp)
   function(a_dur, b_dur, from, to, r) {
-    diag$n_event <- diag$n_event + 1L
+    Tr <- p2_rule_T(inp, diag, a_dur, b_dur, to, r)
+    if (!is.na(Tr)) { p2_note(diag, r, "rule"); return(Tr) }
     k <- inp$kmat[from, to]
-    if (is.na(k) || !theta$ok[k]) { diag$n_midpoint <- diag$n_midpoint + 1L; return((a_dur + b_dur) / 2) }
+    if (is.na(k) || !theta$ok[k]) { p2_note(diag, r, "midpoint"); return((a_dur + b_dur) / 2) }
     lam <- exp(theta$intercept[k] + sum(theta$beta[k, ] * inp$Xiv[r, ]))
+    p2_note(diag, r, "moment")
     moment_match_weibull_naive(a_dur, b_dur, theta$alpha[k], lam)
   }
+}
+
+# C3: closed-form draw from the Weibull conditional on (a, b], H(t) = (lam t)^alpha:  T = (H(a) - log1p(-U (-expm1(-D))))^(1/alpha) / lam, D = H(b) - H(a).
+# Cumulative-hazard form (exact when S(a) underflows). Returns NA when not finite (H(a), H(b), D <= 0, T); otherwise T clamped to [a, b].
+p2_draw_closed <- function(U, a, b, lam, alpha) {
+  if (!is.finite(lam) || lam <= 0 || !is.finite(alpha) || alpha <= 0) return(NA_real_)
+  Ha <- (lam * a)^alpha; Hb <- (lam * b)^alpha; D <- Hb - Ha
+  if (!is.finite(Ha) || !is.finite(Hb) || !is.finite(D) || !(D > 0)) return(NA_real_)
+  x <- Ha - log1p(-U * (-expm1(-D)))
+  Tt <- x^(1 / alpha) / lam
+  if (!is.finite(Tt)) return(NA_real_)
+  min(max(Tt, a), b)
+}
+
+# Imputations (run_one_imputation): rule first (C2); else the closed-form draw for the realised transition; uniform draw on (a, b) where there is
+# no usable fit ("uniform") or the closed form is not finite ("uniform_nonfinite"). Exactly ONE runif(1) per event, drawn first, also for rule events
+# (the stream of the other events is then identical with XREGEN_EXIT_RULE TRUE and FALSE, until the first exit differs).
+make_p2_draw <- function(theta, inp, diag = new.env()) {
+  p2_diag_init(inp, diag); p2_check_rule_inputs(inp)
+  function(a_dur, b_dur, from, to, r) {
+    U <- runif(1)
+    Tr <- p2_rule_T(inp, diag, a_dur, b_dur, to, r)
+    if (!is.na(Tr)) { p2_note(diag, r, "rule"); return(Tr) }
+    k <- inp$kmat[from, to]
+    if (is.na(k) || !theta$ok[k]) { p2_note(diag, r, "uniform"); return(a_dur + U * (b_dur - a_dur)) }
+    lam <- exp(theta$intercept[k] + sum(theta$beta[k, ] * inp$Xiv[r, ]))
+    Td <- p2_draw_closed(U, a_dur, b_dur, lam, theta$alpha[k])
+    if (is.na(Td)) { p2_note(diag, r, "uniform_nonfinite"); return(a_dur + U * (b_dur - a_dur)) }
+    p2_note(diag, r, "draw"); Td
+  }
+}
+
+# per-event table (id_pe, interval, from, to, exit_abs, floored, exit_source) of a build_rows() result and its diag environment
+p2_event_table <- function(b, diag) {
+  t <- b$segs[type == "event", .(id_pe, interval, iv_row, from, to = event_to, exit_abs = end_abs, floored)]
+  t[, exit_source := diag$src[iv_row]]; t[, iv_row := NULL]
+  stopifnot("exit_source missing for an event" = !anyNA(t$exit_source), all(t$exit_source %in% P2_SOURCES))
+  t[]
+}
+# counts per transition and source (long); m = imputation number (NA for the stages)
+p2_source_counts <- function(p2, m = NA_integer_) {
+  r <- p2[, .(n = .N), by = .(transition = paste(from, to, sep = "->"), exit_source)][order(transition, exit_source)]
+  r[, m := m]; setcolorder(r, c("m", "transition", "exit_source", "n")); r[]
+}
+# one printable line: exits per source; uniform_nonfinite is listed per transition
+p2_source_line <- function(src) {
+  tot <- src[, .(n = sum(n)), by = exit_source]; cnt <- function(s) { x <- tot$n[tot$exit_source == s]; if (length(x)) x else 0L }
+  s <- paste(sprintf("%s %d", P2_SOURCES, vapply(P2_SOURCES, cnt, 1L)), collapse = ", ")
+  un <- src[exit_source == "uniform_nonfinite"]
+  if (nrow(un)) s <- paste0(s, " | uniform_nonfinite by transition: ", paste(sprintf("%s %d", un$transition, un$n), collapse = "; "))
+  s
+}
+# diag columns of one imputation
+p2_diag_cols <- function(src, diag) {
+  cnt <- function(s) { x <- sum(src$n[src$exit_source == s]); as.integer(x) }
+  list(p2_rule = cnt("rule"), p2_draw = cnt("draw"), p2_uniform = cnt("uniform"), p2_uniform_nonfinite = cnt("uniform_nonfinite"), p2_rule_at_end = diag$n_rule_at_end)
 }
 
 # ------------------------------------------------------------------------------
@@ -526,14 +627,23 @@ add_cap_columns <- function(res, data_list, ks, inp) {
 # ------------------------------------------------------------------------------
 # stages
 # ------------------------------------------------------------------------------
-run_stage1 <- function(inp, fit_fun) {
+# WP5: the Stage 1 rows, built in ONE place (run_stage1 and R/tests/wp5_recount_stage1.R both call it): entry W_j/2, C2 rule date for X->regen
+# intervals with D_heavy, midpoint otherwise.
+stage1_rows <- function(inp) {
   fe <- setNames(inp$p1$W_j / 2, inp$p1$id_pe)
-  b <- build_rows(inp$iv, fe, inp$states, inp$tr, keep_cols = inp$keep_cols)
+  dg <- new.env()
+  b <- build_rows(inp$iv, fe, inp$states, inp$tr, p2_fun = make_p2_stage1(inp, dg), keep_cols = inp$keep_cols)
+  list(b = b, dg = dg, p2 = p2_event_table(b, dg))
+}
+
+run_stage1 <- function(inp, fit_fun) {
+  s <- stage1_rows(inp); b <- s$b
   # B7: recount events on the final rows before the first fit (stops on a mismatch). Skipped for a subsample: inp$tr holds full-data counts.
   if (isTRUE(inp$subsampled)) cat("recount_events(): skipped (SUBSAMPLE_N is set; transition_set counts are full-data counts)\n") else {
     rc <- recount_events(b$rows, inp$tr); cat(sprintf("recount_events(): OK, %d kept transitions, counts equal transition_set, all >= %d events\n", nrow(rc), MIN_EVENTS)) }
   f <- fit_rows(b$rows, inp, fit_fun)
-  list(theta = extract_theta(f$models, inp), tidy = tidy_fit(f$models, inp), n_events = f$n_events, n_floored = b$n_floored)
+  list(theta = extract_theta(f$models, inp), tidy = tidy_fit(f$models, inp), n_events = f$n_events, n_floored = b$n_floored,
+       p2 = s$p2, p2_src = p2_source_counts(s$p2), p2_rule_at_end = s$dg$n_rule_at_end)
 }
 
 run_stage2 <- function(inp, theta1, fit_fun, M = SIM_M, n_cores = 1L) {
@@ -542,8 +652,10 @@ run_stage2 <- function(inp, theta1, fit_fun, M = SIM_M, n_cores = 1L) {
   b <- build_rows(inp$iv, setNames(p1$entry, p1$id_pe), inp$states, inp$tr,
                   p2_fun = make_p2_moment(theta1, inp, dg), keep_cols = inp$keep_cols)
   f <- fit_rows(b$rows, inp, fit_fun)
+  p2 <- p2_event_table(b, dg)
   list(models = f$models, theta = extract_theta(f$models, inp), tidy = tidy_fit(f$models, inp), n_events = f$n_events,
-       p1 = p1, p2_event = dg$n_event, p2_midpoint = dg$n_midpoint, n_floored = b$n_floored)
+       p1 = p1, p2_event = dg$n_event, p2_midpoint = dg$n_midpoint, n_floored = b$n_floored,
+       p2 = p2, p2_src = p2_source_counts(p2), p2_rule_at_end = dg$n_rule_at_end)
 }
 
 run_one_imputation <- function(m, inp, models_seed, theta_seed, fit_fun, M = SIM_M, sampler = default_sampler, keep_models = FALSE, only_k = NULL) {
@@ -553,15 +665,16 @@ run_one_imputation <- function(m, inp, models_seed, theta_seed, fit_fun, M = SIM
   p1 <- p1_entries(th, inp, M, "draw", 1L)
   dg <- new.env()
   b <- build_rows(inp$iv, setNames(p1$entry, p1$id_pe), inp$states, inp$tr,
-                  p2_fun = make_p2_moment(th, inp, dg), keep_cols = inp$keep_cols)
+                  p2_fun = make_p2_draw(th, inp, dg), keep_cols = inp$keep_cols)
   f <- fit_rows(b$rows, inp, fit_fun, only_k)
   res <- tidy_fit(f$models, inp, f$ks); res[, m := m]
   ev <- data.table(k = f$ks, n_events = as.integer(f$n_events))
   res <- merge(res, ev, by = "k")
   # B6: per-fit cap diagnostic (one value per fit, repeated over its parameter rows like mlik); fixed column order for fwrite(append)
   res <- add_cap_columns(res, f$data, f$ks, inp)
-  out <- list(p1_state = p1_fallback_by_state(p1, inp, m), res = res, diag = data.table(m = m, p1_fallback = sum(p1$fallback), p1_no_candidate = sum(p1$n_cand == 0),
-                                    p2_events = dg$n_event, p2_midpoint = dg$n_midpoint,
+  p2 <- p2_event_table(b, dg); p2_src <- p2_source_counts(p2, m)
+  out <- list(p1_state = p1_fallback_by_state(p1, inp, m), p2_src = p2_src, res = res, diag = data.table(m = m, p1_fallback = sum(p1$fallback), p1_no_candidate = sum(p1$n_cand == 0),
+                                    p2_events = dg$n_event, p2_midpoint = dg$n_midpoint, as.data.table(p2_diag_cols(p2_src, dg)),
                                     n_theta_fallback = th$n_fallback, n_fit_error = sum(vapply(f$models, function(x) !is.null(x$error), logical(1))),
                                     n_floored = b$n_floored, n_fitted = length(f$ks)))
   tms_k <- lapply(seq_len(nrow(inp$td)), function(k) colnames(inp$mask)[inp$mask[k, ]])
@@ -569,7 +682,7 @@ run_one_imputation <- function(m, inp, models_seed, theta_seed, fit_fun, M = SIM
     theta_m = data.table(k = seq_len(nrow(inp$td)), label = inp$td$label, ok = th$ok, alpha = th$alpha, intercept_dec = th$intercept_dec,
                          as.data.table(th$beta_v0)),   # B4: the variant-0 draws (decade intercept, raw beta, alpha)
     p1 = p1[, .(id_pe, entry, n_cand, fallback)],
-    p2 = b$segs[type == "event", .(id_pe, interval, from, to = event_to, exit_abs = end_abs, floored)],
+    p2 = p2,      # id_pe, interval, from, to, exit_abs, floored, exit_source (WP5, C2/C3)
     fits = setNames(lapply(seq_along(f$ks), function(j) fit_extras(f$models[[j]], tms_k[[f$ks[j]]], sampler, N_COV_SAMPLES, sample.int(1e6, 1L))), inp$td$label[f$ks]))
   # fitting data of failed or near-degenerate fits (alpha SD < SD_MIN), to rerun them with verbose = TRUE
   al <- res[parameter == "alpha"]
