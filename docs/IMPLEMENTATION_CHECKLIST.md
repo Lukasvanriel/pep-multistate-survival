@@ -86,17 +86,17 @@ Order is strict: WP1 -> WP2 -> WP3 -> WP4 -> WP5 -> WP6 -> WP7. WP3-WP5 all edit
 - [ ] 05 -> 07_redraw -> 08 done
 - [ ] Watch: cap_check (caveat list comes from here), failure counts of regen->sugar_maple and other_temperate->yellow_birch, P1 fallbacks
 
-## WP7 -- D1-D8 (09, 12, 08, sensitivity/10, 11, tests/08f)   Commit: ______   Review: [ ]
-- [ ] D1 HR = exp(beta); no alpha in the delta method; alpha_cov columns out of the HR table
-- [ ] D2 tau grid 1/10/30/60 y for every transition; range columns; _tsd_1_vs_10y, _tsd_10_vs_30y, _tsd_coef
-- [ ] D3 alpha_report_<tag>.csv
-- [ ] D4 one-sided bounds incl. the main-term-only contrast; regen->sugar_maple at z = 0 only
-- [ ] D5 12: no harv_any; block D on _tsd_coef; block B at each tau; robust without alpha_cov; A11 transitions out of A-GDD, B, C
-- [ ] D6 tests/08f: fit_map_v0 / H_at, new mask, no NA-row dropping, B6 columns
-- [ ] D7 sensitivity/10 (n_dist per level, MIN_EVENTS_S1 from config, no alpha_cov_low_share) and 11 (variant 0, control.fixed, intercept scale, exp(beta), A11)
-- [ ] D8 09 for transitions without z_gdd_3
-- [ ] 09: `LOW_EVENTS_MAX <- MIN_EVENTS + 4L` (moved from B7)
-- [ ] User ran on the Mac: 09 -> 12 -> 10 -> 11; every 12 block has k > 0
+## WP7 -- D1-D8 (09, 12, 08, sensitivity/10, 11, tests/08f)   Commit: 4740560 (09, synthetic data), 7afd526 (12, sensitivity/10, 11, tests/08f), docs: see log   Review: [ ]
+- [ ] D1 HR = exp(beta); no alpha in the delta method; alpha_cov columns out of the HR table  -- *code done (09: q = c'beta, u = c'V_bb c from the stored covariance; alpha_cov columns dropped, user decision Q7); cloud, synthetic fits (08 -> 09): printed check max |pooled log HR per SD CMI - pooled beta| 5e-16; the check on the real 08 output is the Mac run*
+- [ ] D2 tau grid 1/10/30/60 y for every transition; range columns; _tsd_1_vs_10y, _tsd_10_vs_30y, _tsd_coef  -- *code done; synthetic: every transition x level has the four tau rows (14 fire, 28 pest, 69 light, 68 heavy), range columns filled; contrast values equal an independent calculation from the pooled coefficients. The range definition, applied to the real visit_intervals.rds, reproduces the plan (179 pairs; light < 60 y in 45; fire, pest, heavy reach 60 y; tau = 1 below the 5th percentile in all 179). Real 09 output: Mac*
+- [ ] D3 alpha_report_<tag>.csv  -- *code done (columns in the log); synthetic: 90 rows, alpha_log_pooled equals pooled_final est_from_log (stopifnot in 09); cap_flag = share_maxH_map_gt_cap > 0 plus shares and the three medians (user decision Q6)*
+- [ ] D4 one-sided bounds incl. the main-term-only contrast; regen->sugar_maple at z = 0 only  -- *code done; synthetic: exactly regen->sugar_maple (lower, 8 rows: light and heavy x 4 tau, z = 0) and other_temperate->yellow_birch (upper, 1 row `harv_heavy_vs_none`); hr_lo, hr_hi, p NA in these rows (user decisions Q1, Q3, Q4)*
+- [ ] D5 12: no harv_any; block D on _tsd_coef; block B at each tau; robust without alpha_cov; A11 transitions out of A-GDD, B, C  -- *code done; synthetic 09 output -> 12 ran: every block k > 0 (B 177 estimates at each of the four tau, D 179, C 177), 0 rows of regen->sugar_maple in A-GDD, B, C; block D cells by type x class (Q5), D1 rows carry the 1v10 / 10v30 / 30v60 scaling; the bound row of other_temperate->yellow_birch is not in block B (Q2). Real 09 output: Mac*
+- [ ] D6 tests/08f: fit_map_v0 / H_at, new mask, no NA-row dropping, B6 columns  -- *code done; cloud on the REAL rebuild (m1-3, black_spruce->regen and fir->regen, fit_validity made by hand): rebuild check vs baddata_final_m01 1 of 1 identical; 08f maxH_map vs stored mi_raw maxH_map for 6 datasets: max relative difference 2.1e-8, n_above_map equal in 6. The plan Check (100% on all failed datasets) needs the real fit_validity: Mac*
+- [ ] D7 sensitivity/10 (n_dist per level, MIN_EVENTS_S1 from config, no alpha_cov_low_share) and 11 (variant 0, control.fixed, intercept scale, exp(beta), A11)  -- *10 ran on the synthetic 09 output. 11 needs INLA: parse, the A11 mask on the real term mask (regen->sugar_maple has no gdd_btw / gdd_wth / d_gdd), the real row rebuild of m1 (351,747 rows, 90 labels) and the lincomb / tidy helpers on mock objects tested; the Check (step 0 reproduces mi_raw for CHECK_M) is the Mac run. MIN_EVENTS_S1: config.R was not edited (10 uses 20 if the config line is absent); the line to add after 07 is in the log*
+- [ ] D8 09 for transitions without z_gdd_3  -- *code done; synthetic: regen->sugar_maple has harv_light_gdd_per_sd and harv_heavy_gdd_per_sd equal to the pooled gdd_x_harv_* coefficients (stopifnot in 09, tolerance 1e-9) and none of the excluded rows (per_sd_gdd_3, _gdd_interaction, z = -1 / 1)*
+- [x] 09: `LOW_EVENTS_MAX <- MIN_EVENTS + 4L` (moved from B7)  -- *in 09 (read from config); low_events is now a label: "<15" (n_dist < MIN_EVENTS) / "15-19" / NA (user decision 2026-11-05); 12 drops both from the robust subset*
+- [ ] User ran on the Mac: 09 -> 12 -> 10 -> 11; every 12 block has k > 0  -- *command list with pass / stop criteria: log "WP7 -- D1-D8"; also tests/08f*
 
 ## Outside the code
 - [ ] C4 Methods text (exit rule incl. undated heavy disturbances and "fire"; exits drawn; limitations list in the plan)
