@@ -311,12 +311,22 @@ p1_next_exit <- function(p0, p1e, LA, alpha, ks, entry, E) {
 # Candidate entries: paths from regen at time 0 under the piecewise hazards, one candidate per path = entry time of the state occupied at W_j
 # (kept only if that state is the plot's first state). Same random numbers as p1_candidates (one runif per competing exit per step); each exit
 # time is the exact inverse of its own cumulative hazard, the earliest wins.
-p1_candidates_pw <- function(pc, start_idx, s_j, W, alpha, out_k, to_idx, ok, M) {
+# WP5 jump limit (P1_MAX_JUMPS in R/config.R): a path with more jumps stops with an error (a real path has well under 50 over 120 y; more means
+# non-finite or absurd hazards that cycle at time 0). ctx = list(id_pe, first_state, labels) only names the plot and the transitions in the message.
+p1_jump_stop <- function(ctx, pc, np, lk, entry, state, out_k, ok, W) {
+  lab <- if (is.null(ctx$labels)) as.character(lk) else ctx$labels[lk[lk > 0L]]
+  ks <- out_k[[state]]; ks <- ks[ok[ks]]; q <- which(pc$p1[seq_len(np)] > entry)[1L]; if (is.na(q)) q <- np
+  stop(sprintf("P1 jump limit: a candidate path of plot %s (first state %s, W_j %.2f) exceeded %d jumps (P1_MAX_JUMPS); entry now %.6g y. Last transitions: %s. Hazards lambda_k (per year) of the exits from the current state in the piece [%.4g, %.4g]: %s. Non-finite or absurd hazards (check the theta draw); no redraw, no capping, no fallback.",
+               if (is.null(ctx$id_pe)) "?" else ctx$id_pe, if (is.null(ctx$first_state)) "?" else ctx$first_state, W, P1_MAX_JUMPS, entry,
+               paste(lab, collapse = " | "), pc$p0[q], pc$p1[q],
+               paste(sprintf("%s = %.4g", if (is.null(ctx$labels)) ks else ctx$labels[ks], pc$L[q, ks]), collapse = ", ")), call. = FALSE)
+}
+p1_candidates_pw <- function(pc, start_idx, s_j, W, alpha, out_k, to_idx, ok, M, ctx = NULL) {
   if (W <= 0) return(if (s_j == start_idx) rep(0, M) else numeric(0))
   np <- pc$npre; p0 <- pc$p0[seq_len(np)]; p1e <- pc$p1[seq_len(np)]; LA <- pc$LA[seq_len(np), , drop = FALSE]
   cand <- numeric(M); n <- 0L
   for (i in seq_len(M)) {
-    state <- start_idx; entry <- 0
+    state <- start_idx; entry <- 0; nj <- 0L; lk <- integer(6L)
     repeat {
       ks <- out_k[[state]]; ks <- ks[ok[ks]]
       if (!length(ks)) break
@@ -324,6 +334,8 @@ p1_candidates_pw <- function(pc, start_idx, s_j, W, alpha, out_k, to_idx, ok, M)
       best <- nx[1L]; bk <- nx[2L]
       if (bk == 0L || best >= W) break
       state <- to_idx[bk]; entry <- best
+      nj <- nj + 1L; lk <- c(lk[-1L], bk)
+      if (nj > P1_MAX_JUMPS) p1_jump_stop(ctx, pc, np, lk, entry, state, out_k, ok, W)
     }
     if (state == s_j) { n <- n + 1L; cand[n] <- entry }
   }
@@ -353,14 +365,32 @@ p1_weights_pw <- function(cand, s_j, lo, hi, W, pc, alpha, out_k, ok) {
 
 # mode "mean": weighted mean (Stage 2); "draw": weighted draw (MI loop).
 # Plots without a usable candidate get W_j/2 and fallback = TRUE.
-p1_entries <- function(theta, inp, M = SIM_M, mode = c("mean", "draw"), n_cores = 1L) {
+# WP5 guard A: stops when a hazard of an ok transition is not finite (Inf or NaN) in the base rows or the interval rows. No redraw, no capping, no fallback.
+# lambda_matrix() already sets the hazards of not-ok transitions to 0, so every non-finite value here belongs to an ok transition.
+p1_check_hazards <- function(theta, inp, L0, Liv, m = NA_integer_) {
+  b0 <- !is.finite(L0); bv <- !is.finite(Liv)
+  if (!any(b0) && !any(bv)) return(invisible(TRUE))
+  ks <- which(colSums(b0) > 0 | colSums(bv) > 0)
+  raw <- if (!is.null(theta$beta_v0)) theta$beta_v0 else theta$beta
+  det <- vapply(ks, function(k) sprintf("%s (alpha %.3g, max |beta| drawn %.4g, converted %.4g)", inp$td$label[k], theta$alpha[k],
+                                        max(abs(raw[k, ])), max(abs(theta$beta[k, ]))), "")
+  stop(sprintf("P1 guard A (%s): non-finite hazard in %d transition(s) with an ok fit: %s. Affected: %d of %d base rows (X0, one per plot), %d of %d interval rows (Xiv); %d Inf and %d NaN entries. Largest |beta| of these transitions: drawn %.4g, converted %.4g. No redraw, no capping, no fallback.",
+               if (is.na(m)) "imputation not given (Stage 2 or direct call)" else sprintf("imputation m = %d", m), length(ks),
+               paste(head(det, 10), collapse = "; ") , sum(rowSums(b0) > 0), nrow(L0), sum(rowSums(bv) > 0), nrow(Liv),
+               sum(is.infinite(L0)) + sum(is.infinite(Liv)), sum(is.nan(L0)) + sum(is.nan(Liv)),
+               max(abs(raw[ks, ])), max(abs(theta$beta[ks, ]))), call. = FALSE)
+}
+
+p1_entries <- function(theta, inp, M = SIM_M, mode = c("mean", "draw"), n_cores = 1L, m = NA_integer_) {
   mode <- match.arg(mode)
   L0 <- lambda_matrix(theta, inp$X0); Liv <- lambda_matrix(theta, inp$Xiv); f_tsd <- tsd_fun()
+  p1_check_hazards(theta, inp, L0, Liv, m)
   W <- inp$p1$W_j; sj <- inp$p1$s_idx; lo <- inp$p1$obs_lower; hi <- inp$p1$obs_upper
   to_idx <- inp$td$to_idx
   one <- function(j) {
     pc <- p1_pieces(j, theta, inp, L0, Liv, f_tsd)
-    cand <- p1_candidates_pw(pc, inp$start_idx, sj[j], W[j], theta$alpha, inp$out_k, to_idx, theta$ok, M)
+    cand <- p1_candidates_pw(pc, inp$start_idx, sj[j], W[j], theta$alpha, inp$out_k, to_idx, theta$ok, M,
+                             ctx = list(id_pe = inp$p1$id_pe[j], first_state = inp$p1$first_state[j], labels = inp$td$label))
     if (!length(cand)) return(c(NA_real_, 0))
     w <- p1_weights_pw(cand, sj[j], lo[j], hi[j], W[j], pc, theta$alpha, inp$out_k, theta$ok)
     if (is.null(w)) return(c(NA_real_, length(cand)))
@@ -666,7 +696,7 @@ run_one_imputation <- function(m, inp, models_seed, theta_seed, fit_fun, M = SIM
   # only_k: fit only these transitions. The imputation itself (theta draw for ALL transitions, P1, P2) is unchanged, so imputation m is
   # identical whatever only_k is; only the set of fitted transitions differs.
   th <- draw_theta_m(models_seed, inp, theta_seed, sampler)
-  p1 <- p1_entries(th, inp, M, "draw", 1L)
+  p1 <- p1_entries(th, inp, M, "draw", 1L, m = m)
   dg <- new.env()
   b <- build_rows(inp$iv, setNames(p1$entry, p1$id_pe), inp$states, inp$tr,
                   p2_fun = make_p2_draw(th, inp, dg), keep_cols = inp$keep_cols)

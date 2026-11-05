@@ -192,12 +192,43 @@ cat(sprintf("6. synthetic tables (%d plots, %d change intervals): %d rule exits 
             uniqueN(inp$iv$id_pe), sum(inp$iv$is_change), nrow(rule), dev, s1$b$n_floored, nrow(rc)))
 print(dcast(p2_source_counts(p2), transition ~ exit_source, value.var = "n", fill = 0)[1:4])
 
+# ---- 8. P1 guards (guard A: non-finite hazard; jump limit) and the non-finite P2 draw -------------------------------------------------------------------
+catch <- function(expr) tryCatch({ force(expr); NULL }, error = function(e) conditionMessage(e))
+lab <- inp$td$label; ia <- match("a->b", lab); ib <- match("b->a", lab); ir <- match("regen->a", lab)
+# clean theta: runs, finite, reproducible
+set.seed(8); pe1 <- p1_entries(theta, inp, 20L, "draw", 1L); set.seed(8); pe2 <- p1_entries(theta, inp, 20L, "draw", 1L)
+ok(identical(pe1, pe2) && !anyNA(pe1$entry) && nrow(pe1) == nrow(inp$p1), "clean theta: p1_entries must run and be reproducible")
+# (a) one Inf hazard (intercept 800 -> exp = Inf) and one NaN hazard (Inf beta times a zero covariate)
+thI <- theta; thI$intercept[ia] <- 800
+e <- catch(p1_entries(thI, inp, 20L, "draw", 1L, m = 3L))
+ok(is.character(e) && grepl("^P1 guard A \\(imputation m = 3\\)", e) && grepl("a->b", e) && grepl("max \\|beta\\| drawn", e) && grepl("base rows", e) && grepl("Inf and", e), "guard A (Inf): message", e)
+thN <- theta; thN$beta[ib, "harv_heavy"] <- Inf; thN$beta_v0 <- thN$beta; thN$beta_v0[ib, "harv_heavy"] <- 54
+e2 <- catch(p1_entries(thN, inp, 20L, "draw", 1L)); ok(is.character(e2) && grepl("^P1 guard A \\(imputation not given", e2) && grepl("b->a", e2) && grepl("NaN", e2) && grepl("drawn 54", e2), "guard A (NaN): message", e2)
+cat("8a. guard A stops on an Inf hazard (names imputation, transition, rows, largest |beta|) and on a NaN hazard; clean theta runs\n   ", substr(e, 1, 330), "...\n")
+# (b) finite theta with two huge cycling hazards (a->b and b->a at 1e8 per year, regen->a too, so every path reaches the cycle): jump limit
+thC <- theta; thC$ok[] <- TRUE; thC$alpha[] <- 1; thC$beta[] <- 0
+for (k in c(ia, ib, ir)) thC$intercept[k] <- log(1e8)
+t0 <- proc.time()["elapsed"]; e3 <- catch(p1_entries(thC, inp, 20L, "draw", 1L)); tt <- proc.time()["elapsed"] - t0
+ok(is.character(e3) && grepl("^P1 jump limit", e3) && grepl("10000 jumps", e3) && grepl("plot", e3) && grepl("first state", e3) && grepl("a->b|b->a", e3) && grepl("= 1e\\+08", e3) && tt < 60, "jump limit: message / time", c(e3, tt))
+P1_MAX_JUMPS_orig <- P1_MAX_JUMPS; P1_MAX_JUMPS <- 7L; e4 <- catch(p1_entries(thC, inp, 20L, "draw", 1L)); P1_MAX_JUMPS <- P1_MAX_JUMPS_orig
+ok(is.character(e4) && grepl("exceeded 7 jumps", e4), "jump limit reads the constant from config", e4)
+cat(sprintf("8b. jump limit stops a finite cycling theta (%.1f s); the limit is the constant P1_MAX_JUMPS (10000 from config.R)\n    %s\n", tt, substr(e3, 1, 420)))
+# (c) make_p2_draw with non-finite hazards or alpha: uniform_nonfinite, no loop
+inp_p <- mock_inp(); for (cs in list(list(ic = 800, be = 0, al = 1.5), list(ic = 0, be = Inf, al = 1.5), list(ic = 0, be = 0, al = NaN), list(ic = -800, be = 0, al = 1.5))) {
+  th_p <- list(ok = c(TRUE, TRUE), intercept = rep(cs$ic, 2), beta = matrix(cs$be, 2, 1), alpha = rep(cs$al, 2)); dgp <- new.env()
+  t0 <- proc.time()["elapsed"]; x <- make_p2_draw(th_p, inp_p, dgp)(8, 31, "regen", "a", 1L)
+  ok(dgp$src[1L] == "uniform_nonfinite" && x > 8 && x < 31 && proc.time()["elapsed"] - t0 < 1, sprintf("make_p2_draw non-finite case (intercept %g, beta %g, alpha %g)", cs$ic, cs$be, cs$al), dgp$src[1L]) }
+# the Stage 2 moment match with a non-finite hazard: midpoint, labelled moment_fallback (no loop there either)
+for (lam_bad in c(Inf, NaN)) { th_m <- list(ok = c(TRUE, TRUE), intercept = rep(if (is.nan(lam_bad)) NaN else 800, 2), beta = matrix(0, 2, 1), alpha = rep(1.5, 2)); dgm <- new.env()
+  x <- make_p2_moment(th_m, inp_p, dgm)(8, 31, "regen", "a", 1L); ok(dgm$src[1L] == "moment_fallback" && x == 19.5, sprintf("make_p2_moment with hazard %s", lam_bad), dgm$src[1L]) }
+cat("8c. make_p2_draw: Inf / NaN / zero hazard and NaN alpha -> uniform_nonfinite on (a, b); closed form, no loop. make_p2_moment: Inf / NaN hazard -> moment_fallback\n\n")
+
 # ---- 7. run_stage1 / run_stage2 / run_one_imputation plumbing with stubbed fits -----------------------------------------------------------------------
 fit_rows <- function(rows, inp, fit_fun, only_k = NULL) { ks <- if (is.null(only_k)) integer(0) else as.integer(only_k); list(models = list(), n_events = integer(0), data = list(), ks = integer(0)) }
 extract_theta <- function(models, inp, stat = "mean") theta
 tidy_fit <- function(models, inp, ks = integer(0)) data.table(k = integer(0), parameter = character(0), fit_error = logical(0), sd = numeric(0))
 add_cap_columns <- function(res, data_list, ks, inp) res
-p1_entries <- function(theta, inp, M, mode, n_cores) data.table(id_pe = inp$p1$id_pe, entry = inp$p1$W_j / 2, n_cand = 1L, fallback = FALSE)
+p1_entries <- function(theta, inp, M, mode, n_cores, m = NA_integer_) data.table(id_pe = inp$p1$id_pe, entry = inp$p1$W_j / 2, n_cand = 1L, fallback = FALSE)
 draw_theta_m <- function(models, inp, theta_seed, sampler) c(theta, list(intercept_dec = rep(0, K), beta_v0 = matrix(0, K, P, dimnames = list(NULL, inp$terms)), n_fallback = 0L))
 t1 <- run_stage1(inp, NULL); ok(t1$p2_src[exit_source == "rule", sum(n)] == nrow(rule) && t1$p2_rule_at_end == s1$dg$n_rule_at_end, "run_stage1 p2_src")
 t2 <- run_stage2(inp, theta, NULL)
