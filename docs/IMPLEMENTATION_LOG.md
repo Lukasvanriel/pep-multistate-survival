@@ -288,7 +288,7 @@ Template:
 - Hash of "WP4: lambda_matrix NA stop": be794e5 (recorded in a docs-only follow-up commit).
 
 ## WP5 -- C2, C3 + first test runs (2026-11-04) -- CODE DONE, MAC RUNS PENDING
-- Commit: "WP5: C2, C3, first test runs" = HASH1 (hash recorded in a docs-only follow-up commit). Author Lukas Van Riel.
+- Commit: "WP5: C2, C3, first test runs" = 44bde15 (hash recorded in a docs-only follow-up commit). Author Lukas Van Riel.
 - User decisions before the work (2026-11-04): (1) five exit_source labels: `rule`, `draw` (closed form), `uniform` (no usable fit), `uniform_nonfinite` (usable fit, closed form not finite: H(a), H(b), H(b)-H(a) > 0 or T not finite), `moment` (Stage 2 point), `midpoint` (Stage 1; Stage 2 where the fit is unusable);
   (2) Stage 1 and Stage 2 also return a per-event table; `mi_diag` keeps `p2_events`, `p2_midpoint`, adds `p2_rule`, `p2_draw`, `p2_uniform`, `p2_uniform_nonfinite`, `p2_rule_at_end`; (3) non-finite draw -> uniform on (a, b) with its own label, counted per transition and printed in every stage / imputation;
   (4) rule for every X->regen event with D_heavy (kept or not, any theta), `XREGEN_EXIT_RULE = FALSE` off everywhere, stop if the clamp moves a rule exit by > 1e-9; (5) one runif(1) per event, also for rule events; (6) the five C3 test cases, bound 0.01 unchanged; (7) `stage1_rows(inp)`;
