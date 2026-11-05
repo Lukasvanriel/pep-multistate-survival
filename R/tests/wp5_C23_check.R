@@ -133,6 +133,16 @@ XREGEN_EXIT_RULE <- TRUE
 inp_nc <- inp; inp_nc$iv[, D_heavy := NULL]; e <- tryCatch(make_p2_stage1(inp_nc), error = function(e) conditionMessage(e)); ok(grepl("rerun R/04", e), "missing D_heavy must stop at construction", e)
 cat("3. C2 rule: same date in Stage 1 / Stage 2 / draw for ok, failed and non-kept transitions (E = 40, 30, 12.5); X->regen only; end visit counted; clamp stops; switch off: OK\n")
 
+# ---- 3b. moment_fallback ----------------------------------------------------------------------------------------------------------------------
+inp <- mock_inp(); dg <- new.env(); thf <- mock_theta(2, 1.5)            # S(a) = exp(-64) ~ 1e-28: S(a) - S(b) < 1e-10 for a = 8, b = 31 -> midpoint inside the moment match
+x <- make_p2_moment(thf, inp, dg)(8, 31, "regen", "a", 1L); ok(dg$src[1L] == "moment_fallback" && x == 19.5 && dg$n_midpoint == 0L, "moment_fallback (interval probability < 1e-10)", list(dg$src, x))
+dg <- new.env(); x <- make_p2_moment(mock_theta(0.03, 1.5), inp, dg)(8, 31, "regen", "a", 1L); ok(dg$src[1L] == "moment" && x > 8 && x < 31, "regular moment match must stay labelled moment")
+integrate_orig <- integrate; assign("integrate", function(...) stop("forced"), envir = globalenv())      # the integral-failure path
+dg <- new.env(); x <- make_p2_moment(mock_theta(0.03, 1.5), inp, dg)(8, 31, "regen", "a", 1L); rm("integrate", envir = globalenv())
+ok(dg$src[1L] == "moment_fallback" && x == 19.5, "moment_fallback (integral failed)", list(dg$src, x))
+ok(identical(moment_match_weibull_naive(8, 31, 1.5, 0.03), moment_match_weibull_info(8, 31, 1.5, 0.03)$T), "naive == info$T")
+cat("3b. moment_fallback: labelled for both fallback paths (probability < 1e-10; integral failed), regular match stays 'moment'; values unchanged\n")
+
 # ---- 4. one runif per event -----------------------------------------------------------------------------------------------------------------------
 inp2 <- mock_inp(Dh = c(1995.5, NA), n = 2); th <- mock_theta(0.03, 1.5)
 run2 <- function() { set.seed(99); f <- make_p2_draw(th, inp2); c(f(0, 12, "a", "regen", 1L), f(0, 12, "regen", "a", 2L)) }
@@ -191,7 +201,7 @@ p1_entries <- function(theta, inp, M, mode, n_cores) data.table(id_pe = inp$p1$i
 draw_theta_m <- function(models, inp, theta_seed, sampler) c(theta, list(intercept_dec = rep(0, K), beta_v0 = matrix(0, K, P, dimnames = list(NULL, inp$terms)), n_fallback = 0L))
 t1 <- run_stage1(inp, NULL); ok(t1$p2_src[exit_source == "rule", sum(n)] == nrow(rule) && t1$p2_rule_at_end == s1$dg$n_rule_at_end, "run_stage1 p2_src")
 t2 <- run_stage2(inp, theta, NULL)
-ok(t2$p2_src[exit_source == "rule", sum(n)] == nrow(rule) && all(t2$p2$exit_source %in% c("rule", "moment", "midpoint")) && t2$p2_midpoint == sum(t2$p2$exit_source == "midpoint") &&
+ok(t2$p2_src[exit_source == "rule", sum(n)] == nrow(rule) && all(t2$p2$exit_source %in% c("rule", "moment", "moment_fallback", "midpoint")) && t2$p2_midpoint == sum(t2$p2$exit_source == "midpoint") &&
      t2$p2_event == nrow(t2$p2), "run_stage2 sources / counts")
 set.seed(11); im <- run_one_imputation(1L, inp, list(), theta, NULL)
 ex <- im$extras$p2; ok(all(c("exit_source", "exit_abs", "floored") %in% names(ex)) && nrow(ex) == nrow(rule) + sum(ex$exit_source != "rule"), "extras$p2 columns")

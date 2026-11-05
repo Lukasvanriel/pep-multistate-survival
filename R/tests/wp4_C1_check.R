@@ -265,10 +265,32 @@ if (REAL) {
               sum(unlist(ir$on[, .(fire, pest, harv)]) <= 0, na.rm = TRUE), sum(unlist(ir$on[, .(fire, pest, harv)]) > ir$p1$W_j - 1, na.rm = TRUE)))
   Kr <- nrow(ir$td); Pr <- length(ir$terms); thr <- list(alpha = runif(Kr, 1.1, 2), intercept = log(1 / runif(Kr, 25, 70)), beta = matrix(rnorm(Kr * Pr, 0, .2), Kr, Pr, dimnames = list(ir$td$label, ir$terms)), ok = rep(TRUE, Kr))
   thr$beta[!ir$mask] <- 0; L0r <- lambda_matrix(thr, ir$X0); Livr <- lambda_matrix(thr, ir$Xiv)
-  jf <- match(sample(fl, min(300, length(fl))), ir$p1$id_pe); np <- integer(length(jf))
-  for (i in seq_along(jf)) { pc <- p1_pieces(jf[i], thr, ir, L0r, Livr); np[i] <- pc$npre
-    ok(all(abs(pc$p0[-1] - pc$p1[-length(pc$p1)]) < 1e-9) && abs(pc$p1[pc$npre] - ir$p1$W_j[jf[i]]) < 1e-9 && abs(tail(pc$p1, 1) - ir$p1$obs_upper[jf[i]]) < 1e-9, paste("real: pieces of plot", ir$p1$id_pe[jf[i]])) }
+  # plots with W_j = 0 (first visit at stand time 0, first state regen) have no piece before the first visit (npre = 0, by design): at least 5 of them are always checked
+  jf <- match(sample(fl, min(300, length(fl))), ir$p1$id_pe); w0 <- which(ir$p1$W_j == 0)
+  ok(length(w0) >= 5, "real: fewer than 5 plots with W_j = 0", length(w0))
+  n0 <- sum(ir$p1$W_j[jf] == 0); if (n0 < 5) jf <- c(jf, sample(setdiff(w0, jf), 5 - n0))
+  np <- integer(length(jf))
+  for (i in seq_along(jf)) { pc <- p1_pieces(jf[i], thr, ir, L0r, Livr); np[i] <- pc$npre; Wj <- ir$p1$W_j[jf[i]]
+    contiguous <- all(abs(pc$p0[-1] - pc$p1[-length(pc$p1)]) < 1e-9) && abs(tail(pc$p1, 1) - ir$p1$obs_upper[jf[i]]) < 1e-9
+    if (pc$npre == 0L) ok(Wj == 0 && abs(pc$p0[1]) < 1e-9 && contiguous, paste("real: pieces of plot", ir$p1$id_pe[jf[i]], "(npre = 0: W_j == 0 and first piece from t = 0)"))
+    else ok(contiguous && abs(pc$p1[pc$npre] - Wj) < 1e-9, paste("real: pieces of plot", ir$p1$id_pe[jf[i]])) }
+  cat(sprintf("plots with W_j = 0: %d in the table, %d in the sample (npre = 0 checked: W_j == 0 and first piece from t = 0)\n", length(w0), sum(ir$p1$W_j[jf] == 0)))
   cat("\nReal tables, information (no change to P1): plots flagged at the first visit whose flag is OFF at the interval-1 end visit:\n"); print(off_at_end1(ir))
   cat(sprintf("pieces before the first visit in %d flagged plots: median %d, max %d; all contiguous from 0 to the end of the weighting bracket\n", length(jf), as.integer(median(np)), max(np)))
 }
+
+# ---- 9. W_j = 0 plots (synthetic; after everything else so the earlier random streams are unchanged) -----------------------------------------
+{ set.seed(20261201); inw <- c(lapply(1:2, function(i) mk_plot(100 + i, 0, "regen", F0, nint = 3, change_at = if (i == 1) 2 else NA)), lapply(3:5, function(i) mk_plot(100 + i, 30, "a", F0)))
+  dw <- tempfile("wp4w"); dir.create(dw)
+  saveRDS(rbindlist(lapply(inw, `[[`, "iv")), file.path(dw, "visit_intervals.rds")); saveRDS(rbindlist(lapply(inw, `[[`, "pi")), file.path(dw, "plot_info.rds")); saveRDS(tr, file.path(dw, "transition_set.rds"))
+  iw <- prepare_fit_inputs(dw); Kw <- nrow(iw$td); Pw <- length(iw$terms)
+  thw <- list(alpha = runif(Kw, 1.1, 2.1), intercept = log(1 / runif(Kw, 25, 70)), beta = matrix(rnorm(Kw * Pw, 0, 0.25), Kw, Pw, dimnames = list(iw$td$label, iw$terms)), ok = rep(TRUE, Kw)); thw$beta[!iw$mask] <- 0
+  L0w <- lambda_matrix(thw, iw$X0); Livw <- lambda_matrix(thw, iw$Xiv)
+  op <- options(warn = 2)                                  # any warning (e.g. the zero-extent matrix one) is an error here
+  for (j in which(iw$p1$W_j == 0)) { pc <- p1_pieces(j, thw, iw, L0w, Livw)
+    ok(pc$npre == 0L && abs(pc$p0[1]) < 1e-12 && all(abs(pc$p0[-1] - pc$p1[-length(pc$p1)]) < 1e-9) && abs(tail(pc$p1, 1) - iw$p1$obs_upper[j]) < 1e-9 &&
+         nrow(pc$L) == length(pc$p0) && max(abs(pc$L - Livw[iw$iv_first[j] + seq_len(nrow(pc$L)) - 1L, , drop = FALSE])) == 0, sprintf("W_j = 0 plot %d: pieces", iw$p1$id_pe[j])) }
+  pe <- p1_entries(thw, iw, 20L, "draw", 1L); ok(nrow(pe) == 5L && !anyNA(pe$entry), "p1_entries with W_j = 0 plots")
+  options(op) }
+cat("9. W_j = 0 plots: npre = 0, first piece from t = 0, pieces = the observed intervals (L identical to Liv), no warning, p1_entries runs\n")
 cat("\nALL CHECKS PASSED\n")

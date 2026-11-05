@@ -391,3 +391,19 @@ Template:
 - Open issue closed: A1.5 on the `plot_info` first-visit columns. WP4 added it (04 lines 155-163, `stopifnot(!anyNA(plot_info[, ..fvc]))` and coding checks); the run printed
   fv_gdd_3 = fv_cmi_gs = fv_soil_pc1 = 0 NA.
 - Still open from WP1: `download_zip()` does not delete partial zips (see the WP1 section); tests 22 / 23 / 08f / 08g need an explicit main-run source tag for WP3 / WP5.
+
+## WP4 -- follow-up: `wp4_C1_check.R real` (2026-11-04, committed with "WP5: follow-ups")
+- Diagnosis (user, Mac): `Rscript R/tests/wp4_C1_check.R real` failed at "real: pieces of plot 7609800202". That plot has W_j = 0 (59 plots, all first state regen), so `p1_pieces` returns npre = 0 by design (no time before the first visit); the test's `pc$p1[pc$npre]` is `p1[0]` = empty -> NA -> FAIL. P1 is correct; the test was wrong.
+- Changes: (1) `R/tests/wp4_C1_check.R` real section: for npre = 0 the test checks W_j == 0, first piece starts at t = 0, pieces contiguous and ending at the end of the weighting bracket; the sample of 300 flagged plots is topped up so that at least 5 plots with W_j = 0 are always included (stops if the table has fewer than 5); prints how many W_j = 0 plots are in the table and in the sample.
+  New synthetic section 9 (after everything else, so the earlier random streams and KS p-values are unchanged): 2 plots with W_j = 0 (one with a change) + 3 others; pieces = the observed intervals (L identical to Liv), `p1_entries` runs, run under `options(warn = 2)`.
+  (2) `R/05a_fit_funs.R` `p1_pieces`: `Lp <- if (npre) matrix(L0[j, ], npre, K, byrow = TRUE) else matrix(0, 0, K)` (values unchanged; the "non-empty data for zero-extent matrix" warning is gone).
+- Checks (cloud): `wp4_C1_check.R` ALL CHECKS PASSED (checks 1-8 unchanged, same KS p-values); the new section 9 FAILS with the old `Lp` line ("converted from warning: non-empty data for zero-extent matrix", negative control) and passes with the new one. `wp4_C5_toy.R`, `wp3_B4_check.R` pass.
+- Mac: `Rscript R/tests/wp4_C1_check.R real` (step 8 of the list) now also prints "plots with W_j = 0: N in the table, >= 5 in the sample".
+
+## WP5 -- follow-ups (2026-11-04)
+- Commit: "WP5: follow-ups" (hash: see `git log`).
+- User decision: the midpoint fallback inside the moment match gets its own label `moment_fallback`, counted like the others (no hidden fallback).
+- Diagnosis: `moment_match_weibull_naive()` returned `(a + b) / 2` in two internal cases (interval probability S(a) - S(b) not finite or < 1e-10; integral failed / not finite / <= 0) and `make_p2_moment` labelled both "moment".
+- Changes (`R/05a_fit_funs.R`): new `moment_match_weibull_info()` returns `list(T, fallback)` (same code and values); `moment_match_weibull_naive()` = its `T` (unchanged values, same name for the older tests); `make_p2_moment` labels `moment_fallback` when `fallback` is TRUE; `P2_SOURCES` has the seventh label, so every per-label print and csv (`p2_source_line`, `p2_source_stages_<tag>.csv`, `p2_source_<tag>.csv`, `wp5_C23_real_check.R` tables) shows it. The draw-vs-moment comparison in `wp5_C23_real_check.R` uses `moment` only (a fallback midpoint is not a moment point).
+- Checks (cloud): `wp5_C23_check.R` ALL CHECKS PASSED, new section 3b: both fallback paths (probability < 1e-10; `integrate` forced to fail) give `moment_fallback` and the midpoint, a regular match stays `moment`, `naive == info$T`. The old-function comparison on 460 events (identical values) still passes. On the synthetic table Stage 2 now reports `moment 338, moment_fallback 5` (before: `moment 343`): the 5 were hidden.
+- Mac list: unchanged from step 8 on (same commands, same order). Expectation changes only: step 8 prints the extra W_j = 0 line; the P2 source lines of steps 11, 14 and 15 have the extra label `moment_fallback` (Stage 2 only; look at its size per transition; imputations never have it).

@@ -272,7 +272,7 @@ p1_pieces <- function(j, theta, inp, L0, Liv, f_tsd = tsd_fun()) {
     p0 <- brk[-length(brk)]; p1e <- brk[-1L]
   } else { p0 <- numeric(0); p1e <- numeric(0) }
   npre <- length(p0)
-  Lp <- matrix(L0[j, ], npre, K, byrow = TRUE)
+  Lp <- if (npre) matrix(L0[j, ], npre, K, byrow = TRUE) else matrix(0, 0, K)   # W_j = 0: no piece before the first visit
   if (npre && length(on)) {
     mid <- (p0 + p1e) / 2
     Xp <- matrix(inp$X0[j, ], npre, length(inp$terms), byrow = TRUE, dimnames = list(NULL, inp$terms))
@@ -391,10 +391,10 @@ p1_fallback_by_state <- function(p1, inp, m = NA_integer_) {
 # WP5: C2 (exit at the heavy disturbance for X->regen) and C3 (drawn exit). Plan: docs/PIPELINE_FIX_PLAN_2026-11-03.md, C2 / C3.
 # All P2 functions below have the build_rows() signature p2_fun(a_dur, b_dur, from, to, r); r = row of inp$iv (the event interval).
 # exit_source (one value per event): "rule" (C2), "draw" (closed-form C3 draw), "uniform" (no usable fit, uniform draw on (a, b)),
-# "uniform_nonfinite" (usable fit but the closed form is not finite: uniform draw on (a, b), user decision 2026-11-04), "moment" (Stage 2 point),
+# "uniform_nonfinite" (usable fit but the closed form is not finite: uniform draw on (a, b), user decision 2026-11-04), "moment" (Stage 2 point), "moment_fallback" (Stage 2: the moment match fell back to the midpoint),
 # "midpoint" (Stage 1; Stage 2 where the fit is unusable). `diag` is an environment: n_event, n_midpoint (kept names), n_rule_at_end, src[r].
 # ------------------------------------------------------------------------------
-P2_SOURCES <- c("rule", "draw", "uniform", "uniform_nonfinite", "moment", "midpoint")
+P2_SOURCES <- c("rule", "draw", "uniform", "uniform_nonfinite", "moment", "moment_fallback", "midpoint")
 
 p2_diag_init <- function(inp, diag) {
   diag$n_event <- 0L; diag$n_midpoint <- 0L; diag$n_rule_at_end <- 0L
@@ -430,19 +430,22 @@ make_p2_stage1 <- function(inp, diag = new.env()) {
   }
 }
 
-moment_match_weibull_naive <- function(a, b, alpha, lambda) {
+# moment_match_weibull_info(): the moment match (copied from p2_imputation_strategies.R) returning list(T, fallback); fallback = TRUE where the
+# midpoint was used (interval probability < 1e-10 or not finite, or the integral failed). moment_match_weibull_naive() = its T (values unchanged).
+moment_match_weibull_info <- function(a, b, alpha, lambda) {
   S_a <- exp(-(lambda * a)^alpha)
   S_b <- exp(-(lambda * b)^alpha)
   prob_interval <- S_a - S_b
-  if (!is.finite(prob_interval) || prob_interval < 1e-10) return((a + b) / 2)
+  if (!is.finite(prob_interval) || prob_interval < 1e-10) return(list(T = (a + b) / 2, fallback = TRUE))
   integrand <- function(t) (t^alpha) * alpha * lambda^alpha * t^(alpha - 1) * exp(-(lambda * t)^alpha) / prob_interval
   e_t_alpha <- tryCatch(integrate(integrand, lower = a, upper = b, rel.tol = 1e-6)$value, error = function(e) NA_real_)
-  if (!is.finite(e_t_alpha) || e_t_alpha <= 0) return((a + b) / 2)
-  max(a, min(b, e_t_alpha^(1 / alpha)))
+  if (!is.finite(e_t_alpha) || e_t_alpha <= 0) return(list(T = (a + b) / 2, fallback = TRUE))
+  list(T = max(a, min(b, e_t_alpha^(1 / alpha))), fallback = FALSE)
 }
+moment_match_weibull_naive <- function(a, b, alpha, lambda) moment_match_weibull_info(a, b, alpha, lambda)$T
 
 # Stage 2 (the point for the seed models, C3 point 1): rule first (C2), then the moment-matched point for kept transitions with an ok fit,
-# midpoint otherwise. A moment match that falls back to the midpoint inside moment_match_weibull_naive() is still labelled "moment" (not tracked).
+# midpoint otherwise. A moment match that falls back to the midpoint inside the match is labelled "moment_fallback" (WP5 follow-up).
 make_p2_moment <- function(theta, inp, diag = new.env()) {
   p2_diag_init(inp, diag); p2_check_rule_inputs(inp)
   function(a_dur, b_dur, from, to, r) {
@@ -451,8 +454,9 @@ make_p2_moment <- function(theta, inp, diag = new.env()) {
     k <- inp$kmat[from, to]
     if (is.na(k) || !theta$ok[k]) { p2_note(diag, r, "midpoint"); return((a_dur + b_dur) / 2) }
     lam <- exp(theta$intercept[k] + sum(theta$beta[k, ] * inp$Xiv[r, ]))
-    p2_note(diag, r, "moment")
-    moment_match_weibull_naive(a_dur, b_dur, theta$alpha[k], lam)
+    mm <- moment_match_weibull_info(a_dur, b_dur, theta$alpha[k], lam)
+    p2_note(diag, r, if (mm$fallback) "moment_fallback" else "moment")
+    mm$T
   }
 }
 
