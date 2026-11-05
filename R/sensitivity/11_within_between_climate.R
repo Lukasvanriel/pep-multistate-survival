@@ -128,7 +128,9 @@ fit_labels <- function(m, labels, mask, rhs, with_lc) {
   rows <- rebuild_rows(m); sp <- split(rows, by = "label", keep.by = TRUE); rm(rows)
   rbindlist(lapply(labels, function(lb) {
     tms <- terms_of(mask, lb); d <- as.data.frame(sp[[lb]][, c("status", "Tstop", "truncation", tms), with = FALSE])
-    tidy_one(fit_one(d, rhs[[lb]], with_lc, tms), tms, lb, m, sum(d$status == 1L), with_lc)
+    tb <- tidy_one(fit_one(d, rhs[[lb]], with_lc, tms), tms, lb, m, sum(d$status == 1L), with_lc)
+    cap <- cap_diagnostics(d, tms, tb[parameter %in% c("alpha", "(Intercept)", tms)])   # B6 as in 05/07 (05a): MAP vs INLA mode; z_map_alpha / z_map_intercept feed the screen
+    tb[, (names(cap)) := as.list(cap)][]
   }))
 }
 
@@ -137,7 +139,6 @@ mi_raw <- fread(file.path(IN_DIR, sprintf("mi_raw_%s.csv", RUN_TAG)))
 fv0 <- fread(file.path(RESULTS_DIR, sprintf("fit_validity_%s.csv", RUN_TAG)))
 CHECK_LABELS <- intersect(CHECK_LABELS, fv0[m == CHECK_M & valid == TRUE, label]); stopifnot(length(CHECK_LABELS) > 0)
 chk <- fit_labels(CHECK_M, CHECK_LABELS, inp$mask, inp$rhs, FALSE)
-stopifnot("fit_labels does not return z_map_alpha / z_map_intercept: the screen (section 2) cannot run; stop before the hours-long pass 1" = all(c("z_map_alpha", "z_map_intercept") %in% names(chk)))
 cmp <- merge(chk[, .(label, parameter, est_new = est, n_new = n_events)], mi_raw[m == CHECK_M, .(label, parameter, est, sd, n_events)], by = c("label", "parameter"))
 cmp[, dz := abs(est_new - est) / sd]
 cat("\nStep 0, reproduction of mi_raw (imputation", CHECK_M, "):\n"); print(cmp[, .(max_dz = round(max(dz), 4), events_equal = all(n_new == n_events)), by = label])
