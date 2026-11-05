@@ -81,12 +81,13 @@ add_idx <- function(d) {
 }
 hr <- add_idx(hr)
 
-clim <- hr[contrast %in% c("per_sd_gdd_3", "per_sd_cmi_gs", "per_sd_soil_pc1")]
+clim <- hr[contrast %in% c("per_sd_gdd_3", "per_sd_cmi_gs", "per_sd_soil_pc1")]   # (a11 transitions have no per_sd_gdd_3 row; CMI and soil stay)
 clim[, cov := c(per_sd_gdd_3 = "gdd", per_sd_cmi_gs = "cmi", per_sd_soil_pc1 = "soil")[contrast]]
 clim[, `:=`(dIndex = fcase(cov == "gdd", dSTI, cov == "cmi", dSMI, cov == "soil", dSSI),
             Index_to = fcase(cov == "gdd", STI_to, cov == "cmi", SMI_to, cov == "soil", SSI_to))]
-dmain <- rbindlist(lapply(TAU_B, function(tt) hr[grepl(sprintf("_vs_none z=0 tau=%gy$", tt), contrast) & is.na(bound)][, tau_y := tt]))   # one-sided-bound rows are not estimates for the synthesis
-inter <- hr[grepl("_gdd_interaction$", contrast)]
+a11 <- setdiff(hr$label, hr[contrast == "per_sd_gdd_3", label])                        # A11: transitions without a GDD main term (D5.6): out of A (GDD), B and C, explicitly
+dmain <- rbindlist(lapply(TAU_B, function(tt) hr[grepl(sprintf("_vs_none z=0 tau=%gy$", tt), contrast) & is.na(bound) & !label %in% a11][, tau_y := tt]))   # one-sided-bound rows are not estimates for the synthesis
+inter <- hr[grepl("_gdd_interaction$", contrast) & !label %in% a11]
 tsd   <- hr[grepl("_tsd_coef$", contrast)]                                            # one estimate per transition x type (no de-duplication)
 
 pl <- fread(file.path(DIR, sprintf("pooled_%s_final.csv", RUN_TAG)))
@@ -168,4 +169,4 @@ inp_all <- fread(file.path(DIR, sprintf("synthesis_inputs_%s.csv", RUN_TAG)))
 kk <- inp_all[, .(k_all = .N, k_robust = sum(robust)), by = .(block, tau_y)][order(block, tau_y)]
 cat("\nD5 check, estimates per block (all / robust):\n"); print(kk); stopifnot(nrow(kk) >= 4L + length(TAU_B) - 1L, all(kk$k_all > 0), all(kk$k_robust > 0))
 cat("A11 check: GDD / B / C rows of transitions without a GDD main term:\n")
-nog <- setdiff(hr$label, hr[contrast == "per_sd_gdd_3", label]); n_a11 <- inp_all[label %in% nog & (block %in% c("B_disturbance", "C_interaction") | (block == "A_climate" & sub == "gdd")), .N]; cat("  transitions without z_gdd_3:", paste(nog, collapse = ", "), "| rows:", n_a11, "\n"); stopifnot(n_a11 == 0L)
+nog <- a11; n_a11 <- inp_all[label %in% nog & (block %in% c("B_disturbance", "C_interaction") | (block == "A_climate" & sub == "gdd")), .N]; cat("  transitions without z_gdd_3:", paste(nog, collapse = ", "), "| rows:", n_a11, "\n"); stopifnot(n_a11 == 0L)

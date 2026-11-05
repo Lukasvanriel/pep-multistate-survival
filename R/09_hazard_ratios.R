@@ -70,6 +70,8 @@ for (mm in sort(unique(val$m))) {
   for (lb in val[m == mm, label]) {
     cv <- fits[[lb]]$cov; stopifnot(!is.null(cv), is.null(cv$error)); r <- raw[label == lb & m == mm]
     est <- setNames(r$est, r$parameter); V <- cv$cov; CC <- make_contrasts(setdiff(colnames(V), c("(Intercept)", "alpha")))
+    miss <- setdiff(unlist(lapply(CC, names)), names(est))
+    if (length(miss)) stop(sprintf("09: %s (m = %d): contrast term(s) missing from the fit's estimates: %s", lb, mm, paste(unique(miss), collapse = ", ")), call. = FALSE)   # no silent NA
     for (cn in names(CC)) { cc <- CC[[cn]]
       res[[length(res) + 1L]] <- data.table(label = lb, m = mm, contrast = cn, q = sum(cc * est[names(cc)]), u = as.numeric(t(cc) %*% V[names(cc), names(cc), drop = FALSE] %*% cc)) } } }
 res <- rbindlist(res)
@@ -118,7 +120,8 @@ ar <- merge(ar, tsdw, by = "label", all.x = TRUE)
 ar <- merge(ar, cap[, .(label, n_used, share_maxH_map_gt_cap, share_maxH_inla_gt_cap, cap_flag = share_maxH_map_gt_cap > 0, median_maxH_map, median_z_map_max, median_z_map_alpha, median_z_map_intercept)], by = "label", all.x = TRUE)
 setorder(ar, k); fwrite(ar, file.path(RESULTS_DIR, sprintf("alpha_report_%s.csv", RUN_TAG)))
 cat(sprintf("\nAlpha report: %d rows (%d regen_exit = starts at the disturbance, %d to_regen, %d between); cap_flag TRUE in %d\n", nrow(ar), ar[class == "regen_exit", .N], ar[class == "to_regen", .N], ar[class == "between", .N], ar[cap_flag == TRUE, .N]))
-stopifnot(nrow(ar) == 90L, isTRUE(all.equal(ar$alpha_log_pooled, pf[parameter == "alpha"][order(k)]$est_from_log)))
+chk_a <- merge(ar[, .(label, alpha)], pf[parameter == "alpha", .(label, pooled_est)], by = "label")   # alpha_report's pooled alpha vs the alpha row of pooled_<tag>_final.csv, by label
+stopifnot(nrow(ar) == 90L, nrow(chk_a) == 90L, all(abs(chk_a$alpha - chk_a$pooled_est) < 1e-12))
 
 # ---- checks and prints ---------------------------------------------------------------------------------------------------------------------------------------------
 cat("\nD1 check: pooled log HR per SD CMI vs pooled beta of z_cmi_gs (same estimates: identical up to floating point):\n")
