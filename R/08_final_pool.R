@@ -2,8 +2,10 @@
 # 08_final_pool.R   (no INLA needed; seconds to run; run from the project root: Rscript R/08_final_pool.R)
 # Purpose: final pooled results for ALL kept transitions with the SAME rule for every transition.
 #   1. Pull every regular-pipeline fit: mi_raw_<tag>.csv (m1-30, 05_fit_inla.R) and mi_raw_redraw_<tag>.csv (candidates, 07_redraw.R).
-#   2. Apply the frozen screen (references from screen_ref_<tag>.csv, written by 07_redraw.R before any candidate was fitted):
-#      VALID if no INLA error/NA; alpha-SD ratio sd/(0.78*alpha/sqrt(events)) >= 0.1; |intercept - ref| / ref_sd <= 4.
+#   2. Apply the screen (user decision 2026-11-05; replaces the old rule 3 "intercept vs. screen_ref median", z <= 4):
+#      VALID if (1) no INLA error and est/sd not NA; (2) alpha-SD ratio sd/(0.78*alpha/sqrt(events)) >= 0.1;
+#      (3') |z_map_alpha| <= 3 and |z_map_intercept| <= 3 (B6 columns of mi_raw / mi_raw_redraw: INLA mode vs. direct maximisation of the same log-posterior, fit_map_v0).
+#      The screen needs no reference table (screen_ref_<tag>.csv is no longer read).
 #   3. Use the first TARGET (30) valid fits per transition in increasing m (selection by index only, never by results). Stop if a transition has fewer.
 #   4. Rubin-pool estimates (pool_all) and the joint covariance (Rubin on the stored per-fit covariances, as sampled by inla.posterior.sample;
 #      no post-hoc correction of alpha's spread: the correction was tried for the "int" run and rejected, see PIPELINE_NOTES 2026-10-20).
@@ -15,7 +17,7 @@
 suppressPackageStartupMessages(library(data.table)); options(width = 200)
 source(here::here("R", "config.R"))   # RUN_TAG, FIT_DIR, RESULTS_DIR
 dir.create(RESULTS_DIR, recursive = TRUE, showWarnings = FALSE)
-TARGET <- 30L; RATIO_MIN <- 0.1; Z_MAX <- 4
+TARGET <- 30L; RATIO_MIN <- 0.1; Z_MAP_MAX <- 3
 OUT_DIR <- FIT_DIR
 ex <- parse(file.path("R", "05a_fit_funs.R"))                                                       # take pool_rubin / flag_fits / pool_all only (no INLA needed)
 for (e in ex) if (is.call(e) && identical(e[[1]], as.name("<-")) && as.character(e[[2]])[1] %in% c("pool_rubin", "flag_fits", "pool_all")) eval(e)
@@ -31,14 +33,13 @@ stopifnot(!anyDuplicated(raw[, .(k, m, parameter)]))
 stopifnot("mi_raw lacks the B6 cap columns (run 05/07 of the final pipeline)" = all(c("maxH_inla", "n_above_inla", "maxH_map", "n_above_map", "z_map_max", "z_map_alpha", "z_map_intercept") %in% names(raw)))   # before any computation or output
 cat(sprintf("Fits pulled: %d (imputation x transition) from %d imputations, %d transitions\n", uniqueN(raw[, .(k, m)]), uniqueN(raw$m), uniqueN(raw$k)))
 
-# ---- 2. frozen screen on every fit ----------------------------------------------------------------------------------------------------------------------
-ref <- fread(file.path(OUT_DIR, sprintf("screen_ref_%s.csv", RUN_TAG)))                              # frozen by 07_redraw.R
-a <- raw[parameter == "alpha", .(k, label, m, alpha = est, a_sd = sd, n_events, fit_error)]
+# ---- 2. screen on every fit ----------------------------------------------------------------------------------------------------------------------
+a <- raw[parameter == "alpha", .(k, label, m, alpha = est, a_sd = sd, n_events, fit_error, z_map_alpha, z_map_intercept)]   # B6 columns repeat over a fit's rows
 i <- raw[parameter == "(Intercept)", .(k, m, icpt = est, i_sd = sd)]
 x <- merge(a, i, by = c("k", "m"), all.x = TRUE); x[, ratio := a_sd / (0.78 * alpha / sqrt(n_events))]
-x <- merge(x, ref, by = "k", all.x = TRUE); x[, z_icpt := (icpt - icpt_ref) / icpt_sd_ref]
 x[, reason := fifelse(fit_error %in% TRUE | is.na(alpha) | is.na(a_sd) | is.na(icpt), "error/NA",
-              fifelse(ratio < RATIO_MIN, "alpha_sd_ratio", fifelse(is.na(z_icpt) | abs(z_icpt) > Z_MAX, "intercept", "ok")))]
+              fifelse(ratio < RATIO_MIN, "alpha_sd_ratio",
+              fifelse(is.na(z_map_alpha) | is.na(z_map_intercept) | abs(z_map_alpha) > Z_MAP_MAX | abs(z_map_intercept) > Z_MAP_MAX, "z_map", "ok")))]
 x[, valid := reason == "ok"]
 
 # ---- 3. first TARGET valid fits per transition, by increasing m -------------------------------------------------------------------------------------------
@@ -47,8 +48,9 @@ x[, rank_valid := ifelse(valid, cumsum(valid), NA_integer_), by = k]
 x[, used := valid & rank_valid <= TARGET]
 summ <- x[, .(label = label[1], candidates = .N, valid = sum(valid), used = sum(used), max_m_used = max(c(0L, m[used]))), by = k]
 cat(sprintf("\nTransitions whose %d used fits include replacements (max m used > 30): %d\n", TARGET, summ[max_m_used > 30, .N])); print(summ[max_m_used > 30][order(-max_m_used)])
-cat("\nInvalid fits by transition and reason:\n"); print(dcast(x[valid == FALSE, .N, by = .(label, reason)], label ~ reason, value.var = "N", fill = 0))
-fwrite(x[, .(k, label, m, alpha, ratio, icpt, z_icpt, reason, valid, used)], file.path(RESULTS_DIR, sprintf("fit_validity_%s.csv", RUN_TAG)))
+cat("\nInvalid fits by transition and reason:\n"); inv <- x[valid == FALSE, .N, by = .(label, reason)]
+if (nrow(inv)) print(dcast(inv, label ~ reason, value.var = "N", fill = 0)) else cat("  none\n")
+fwrite(x[, .(k, label, m, alpha, ratio, icpt, z_map_alpha, z_map_intercept, reason, valid, used)], file.path(RESULTS_DIR, sprintf("fit_validity_%s.csv", RUN_TAG)))
 if (any(summ$used < TARGET)) { print(summ[used < TARGET]); stop("some transition has fewer than ", TARGET, " valid fits; nothing pooled (run 07_redraw.R further)") }
 
 # ---- 4. pool estimates and joint covariance over exactly the used fits -------------------------------------------------------------------------------------

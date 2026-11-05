@@ -518,3 +518,40 @@ Template:
 | 4 | `Rscript R/sensitivity/10_sensitivity_posthoc.R 2>&1 \| tee data-output/final/results/sens10_console.log` | S1 counts by n_dist; S2, S3 tables | STOP on error |
 | 5 | `Rscript R/tests/08f_failed_vs_valid.R 2>&1 \| tee data-output/final/results/08f_console.log` (writes `fits/failcheck_map/`, `fits/failcheck_final.csv`, `fits/failcheck_summary_final.csv`) | "Rebuild check vs saved failing data: N datasets, identical rows/events/max exit: N" (plan: 100%); "B6 consistency ... max relative difference" < 1e-6 and n_above_map equal in all; MAP convergence problems 0 | STOP if the rebuild check is not N of N or the B6 difference > 1e-6 |
 | 6 | only after the screen decision and a rerun of 08: `Rscript R/sensitivity/11_within_between_climate.R 2>&1 \| tee data-output/final/results/sens11_console.log` (hours; INLA) | Step 0 table: max_dz <= 0.1 and events_equal TRUE for the three CHECK_LABELS (the script stops by itself otherwise) | STOP if step 0 stops; then pass 1 / pass 2 progress |
+
+## Screen change (2026-11-05, user decision) -- B5 note
+- Commit: "Screen: z_map rule replaces the intercept-reference rule (08, sensitivity/11)" (hash: see `git log`). Author Lukas Van Riel.
+- New rule (08 section 2, 11 `screen()`): a fit is VALID if (1) no INLA error and est/sd of alpha and intercept not NA; (2) alpha-SD ratio sd_alpha / (0.78 * alpha / sqrt(events)) >= 0.1; (3') |z_map_alpha| <= 3 and |z_map_intercept| <= 3 (B6 columns of mi_raw / mi_raw_redraw). Old rule 3 (|intercept - screen_ref median| / ref SD <= 4) dropped. Selection stays "first 30 valid by m". Reason code of rule 3' is "z_map" (old: "intercept"); a NA z_map counts as invalid (same as the old NA z_icpt); on the real files it is moot: both NA cases are already "error/NA" under rule 1.
+- B5 note (screen changed after seeing results). Reason (user): under variant 0 the old rule 3 anchored on partly collapsed black_spruce->regen fits and rejected every healthy one (healthy: z_map < 1, alpha ~ 1.4, ratio ~ 1.15; rejected at z ~ 10-12). INLA's own diagnostics (mode_status, warnings) do not identify the non-converged fits. z_map compares INLA's mode with direct maximisation of the same log-posterior (fit_map_v0); the ratio rule still catches collapsed SDs. Selection test (`R/tests/24_map_selection_regen.R`, log `data-output/diagnostics/24_map_selection.log`): MAP pooled over all imputations vs healthy only differs by at most 0.28 SE (black_spruce->regen) and 0.14 SE elsewhere, so replacement does not select on the data.
+- Changed: `R/08_final_pool.R` (screen; `screen_ref_<tag>.csv` no longer read; `fit_validity_<tag>.csv` has `z_map_alpha`, `z_map_intercept` instead of `z_icpt`; the "Invalid fits by transition and reason" print no longer crashes when no fit is invalid: prints "none"); `R/sensitivity/11_within_between_climate.R` (same screen, no `screen_ref_wb.csv`, `Z_MAX` -> `Z_MAP_MAX`; one guard added right after the step-0 `fit_labels` call, see open item 2). Not edited: config.R, covariate_spec.R, 04b_build_rows.R, 05a_fit_funs.R, 05_fit_inla.R, 07_redraw.R (07 running).
+- Tests (cloud, R 4.3.3, no INLA; the screen block of 08, sections 2-3 up to `summ`, evaluated on given tables, nothing written):
+  - Synthetic: z = 3.0 and -3.0 valid, 3.0001 / 3.5 invalid, NA z (alpha or intercept) invalid, ratio 0.058 invalid, fit_error and NA intercept invalid, z 11 / 10 invalid; a transition with 36 candidates (two invalid, interleaved): the 30 used are the first 30 valid by m; a table with no invalid fit: "none", no crash; with invalid fits: dcast table printed. All as intended.
+  - Real `mi_raw_final.csv` + `mi_raw_redraw_final.csv` (read-only; snapshot while 07 was still running: 2,886 fits = 90 transitions x 150 imputations incl. 186 redraw fits):
+
+| | old rule | new rule |
+|---|---|---|
+| valid fits | 2,703 | 2,710 |
+| alpha_sd_ratio | 141 | 141 |
+| intercept (old) / z_map (new) | 40 | 33 (27 both z > 3, 5 alpha only, 1 intercept only) |
+| error/NA | 2 | 2 |
+| transitions with < 30 valid | 1 | 2 |
+
+Cross-table: valid old and new 2,690; invalid in both 163; valid old only 13; valid new only 20.
+
+| transition | candidates | valid old | valid new | ratio fails | z_map fails | valid new in m1-30 |
+|---|---|---|---|---|---|---|
+| black_spruce->regen | 150 | 7 | 20 | 107 | 22 | 2 |
+| jack_pine->regen | 48 | 34 | 31 | 10 | 7 | 18 |
+| sugar_maple->regen | 36 | 33 | 32 | 3 | 1 | 27 |
+| red_maple->regen | 36 | 35 | 34 | 1 | 1 | 28 |
+| other_pioneer->regen | 30 | 30 | 29 | 0 | 1 | 29 |
+| the other 85 transitions | 30-? | equal | equal | | | |
+
+  - The 20 fits valid only under the new rule are all black_spruce->regen (old z_icpt -11.7 .. -8.8, max z_map 1.09). Of the 13 valid only under the old rule, 7 are black_spruce->regen (z_map_alpha 6.4-16.7, ratio 0.11-0.17, just above the 0.1 limit), 3 jack_pine->regen, 1 each other_pioneer, red_maple, sugar_maple->regen (z_map_alpha 3.3-8.3, one at 2.7 / 3.68 on the intercept). Among ratio-passing fits the max z_map is 0.12 (median), 0.20 (90%), 4.99 (99%); 3 fits lie in (2, 3] and 2 in (3, 4], so the cut at 3 changes few fits.
+  - Transitions with 30 used fits: new 88, old 89; with replacements (max m used > 30): 8 and 8.
+- Red flags / open items (not resolved):
+  1. black_spruce->regen has 20 valid fits of 150 candidates under the new rule (2 of m1-30); 107 of 150 candidates (71%) fail the alpha-SD ratio rule, unchanged by this decision. 08 stops ("fewer than 30 valid fits") unless 07 delivers more candidates; 07 is still running.
+  2. other_pioneer->regen has 29 valid of 30 and no redraw candidates: 07 decides how many candidates to fit with the OLD rule (frozen refs, 30 old-valid), so it will not fit more for this transition. Under the new rule 08 would stop on it. Decision needed (07 is not edited here).
+  3. 11: `fit_labels` returns no z_map_alpha / z_map_intercept (only INLA means and SDs), so its screen cannot work yet. The added guard stops 11 right after step 0 (minutes, before pass 1). Whether to compute the columns in `fit_labels` (cap_diagnostics from 05a, MAP per fit) is not decided.
+  4. 07 still prints the screen reference table and still writes `screen_ref_<tag>.csv`; harmless, no longer used by 08 / 11.
+  5. Any change of the screen means 08 -> 09 -> 12 -> 10 (-> 11) are rerun (from the WP7 open items; unchanged).

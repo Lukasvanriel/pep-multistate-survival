@@ -26,11 +26,11 @@
 #   1. Pass 1: refits every transition on its 30 USED imputations (fit_validity_<tag>.csv, used == TRUE) with the within/between formula.
 #      Same INLA call as fit_inla_models_pc in 05a (weibullsurv variant WEIBULL_VARIANT = 0, control.fixed N(0, COEF_PRIOR_SD^2) with a flat intercept, adaptive, grid, VB off, config TRUE), plus linear combinations
 #      d_gdd = gdd_wth - gdd_btw (where GDD is in the model) and d_cmi = cmi_wth - cmi_btw (derived only; they do not change the fit). Estimates are log hazard ratios: HR = exp(beta); the intercept stays on INLA's decade scale.
-#   2. Frozen screen (same rules as 08_final_pool.R): no error/NA; alpha-SD ratio >= 0.1; |intercept z| <= 4, reference = median intercept and
-#      median intercept SD of this run's ratio-passing pass-1 fits (frozen after pass 1, saved).
+#   2. Screen (same rules as 08_final_pool.R, user decision 2026-11-05): no error/NA; alpha-SD ratio >= 0.1; |z_map_alpha| <= 3 and |z_map_intercept| <= 3
+#      (INLA mode vs. direct maximisation of the same log-posterior, cap_diagnostics in 05a). No reference table.
 #   3. Pass 2: a transition with < 30 valid fits gets replacement fits from the other stored imputations, in increasing m.
 #   4. Rubin pooling (pool_all from 05a_fit_funs.R) and the comparison table.
-# OUTPUTS (SENS_DIR/wb = data-output/<RUN_TAG>/sensitivity/wb/; inttest version in data-output/inttest/sensitivity/wb/): raw_wb_p1_mXXX.csv / raw_wb_p2_mXXX.csv (per imputation, resumable), screen_ref_wb.csv, validity_wb.csv,
+# OUTPUTS (SENS_DIR/wb = data-output/<RUN_TAG>/sensitivity/wb/; inttest version in data-output/inttest/sensitivity/wb/): raw_wb_p1_mXXX.csv / raw_wb_p2_mXXX.csv (per imputation, resumable), validity_wb.csv,
 #   pooled_wb.csv, compare_within_between_wb.csv (one row per transition), summary printed.
 # PILOT: set PILOT_M <- c(1, 2, 3) to run step 0 and pass 1 for those imputations only and print a time estimate for the full run.
 # ==============================================================================
@@ -42,7 +42,7 @@ source(here::here("R", "config.R"))   # RUN_TAG (run whose imputations are reuse
 IN_DIR    <- FIT_DIR
 OUT_DIR   <- file.path(SENS_DIR, "wb"); dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 N_WORKERS <- 6L
-TARGET    <- 30L; RATIO_MIN <- 0.1; Z_MAX <- 4
+TARGET    <- 30L; RATIO_MIN <- 0.1; Z_MAP_MAX <- 3
 PILOT_M   <- NULL                                    # e.g. c(1, 2, 3) for a timing pilot
 CHECK_M   <- 1L
 CHECK_LABELS <- c("black_spruce->fir", "white_birch->fir", "fir->white_birch")   # must be VALID fits in CHECK_M (a collapsed original cannot be reproduced)
@@ -137,6 +137,7 @@ mi_raw <- fread(file.path(IN_DIR, sprintf("mi_raw_%s.csv", RUN_TAG)))
 fv0 <- fread(file.path(RESULTS_DIR, sprintf("fit_validity_%s.csv", RUN_TAG)))
 CHECK_LABELS <- intersect(CHECK_LABELS, fv0[m == CHECK_M & valid == TRUE, label]); stopifnot(length(CHECK_LABELS) > 0)
 chk <- fit_labels(CHECK_M, CHECK_LABELS, inp$mask, inp$rhs, FALSE)
+stopifnot("fit_labels does not return z_map_alpha / z_map_intercept: the screen (section 2) cannot run; stop before the hours-long pass 1" = all(c("z_map_alpha", "z_map_intercept") %in% names(chk)))
 cmp <- merge(chk[, .(label, parameter, est_new = est, n_new = n_events)], mi_raw[m == CHECK_M, .(label, parameter, est, sd, n_events)], by = c("label", "parameter"))
 cmp[, dz := abs(est_new - est) / sd]
 cat("\nStep 0, reproduction of mi_raw (imputation", CHECK_M, "):\n"); print(cmp[, .(max_dz = round(max(dz), 4), events_equal = all(n_new == n_events)), by = label])
@@ -170,18 +171,18 @@ if (!is.null(PILOT_M)) {
   quit(save = "no")
 }
 
-# ---- 2. frozen screen ---------------------------------------------------------------------------------------------------------------------------------------
-screen <- function(raw, ref = NULL) {
-  a <- raw[parameter == "alpha", .(label, m, alpha = est, a_sd = sd, n_events, fit_error)]
+# ---- 2. screen (same rules as 08_final_pool.R, user decision 2026-11-05) ---------------------------------------------------------------------------------------------------------------------------------------
+screen <- function(raw) {
+  stopifnot("screen needs z_map_alpha and z_map_intercept in the fit table (cap_diagnostics, 05a)" = all(c("z_map_alpha", "z_map_intercept") %in% names(raw)))
+  a <- raw[parameter == "alpha", .(label, m, alpha = est, a_sd = sd, n_events, fit_error, z_map_alpha, z_map_intercept)]
   i <- raw[parameter == "(Intercept)", .(label, m, icpt = est, i_sd = sd)]
   x <- merge(a, i, by = c("label", "m")); x[, ratio := a_sd / (0.78 * alpha / sqrt(n_events))]
-  if (is.null(ref)) ref <- x[!(fit_error %in% TRUE) & !is.na(ratio) & ratio >= RATIO_MIN, .(icpt_ref = median(icpt), icpt_sd_ref = median(i_sd)), by = label]
-  x <- merge(x, ref, by = "label", all.x = TRUE); x[, z_icpt := (icpt - icpt_ref) / icpt_sd_ref]
   x[, reason := fifelse(fit_error %in% TRUE | is.na(alpha) | is.na(a_sd) | is.na(icpt), "error/NA",
-                fifelse(ratio < RATIO_MIN, "alpha_sd_ratio", fifelse(is.na(z_icpt) | abs(z_icpt) > Z_MAX, "intercept", "ok")))]
-  x[, valid := reason == "ok"]; list(x = x, ref = ref)
+                fifelse(ratio < RATIO_MIN, "alpha_sd_ratio",
+                fifelse(is.na(z_map_alpha) | is.na(z_map_intercept) | abs(z_map_alpha) > Z_MAP_MAX | abs(z_map_intercept) > Z_MAP_MAX, "z_map", "ok")))]
+  x[, valid := reason == "ok"]; list(x = x)
 }
-s1 <- screen(raw1); ref <- s1$ref; fwrite(ref, file.path(OUT_DIR, "screen_ref_wb.csv"))
+s1 <- screen(raw1)
 cat("\nPass 1 screen:\n"); print(s1$x[, .N, by = reason])
 
 # ---- 3. pass 2: replacements from other stored imputations, increasing m ---------------------------------------------------------------------------------
@@ -193,7 +194,7 @@ for (round in 1:20) {
     if (!length(cand)) return(NULL); data.table(label = lb, m = head(cand, TARGET - need$n_valid[j])) }))
   if (is.null(pairs) || !nrow(pairs)) { cat("No candidates left for:", paste(need$label, collapse = ", "), "\n"); break }
   tag <- sprintf("p2r%02d", round); r2 <- run_pass(pairs, tag); r2 <- r2[pairs, on = .(label, m), nomatch = 0]
-  s2 <- screen(r2, ref); raw_all <- rbind(raw_all, r2, fill = TRUE); val <- rbind(val, s2$x[, .(label, m, valid, reason, pass = tag)])
+  s2 <- screen(r2); raw_all <- rbind(raw_all, r2, fill = TRUE); val <- rbind(val, s2$x[, .(label, m, valid, reason, pass = tag)])
 }
 setorder(val, label, pass, m)                                   # pass-1 fits first, then replacements in increasing m
 val[, rank_valid := ifelse(valid, cumsum(valid), NA_integer_), by = label]; val[, used := valid & rank_valid <= TARGET]
