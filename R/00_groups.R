@@ -11,3 +11,8 @@ GRP <- c(black_spruce = "boreal", white_spruce = "boreal", fir = "boreal", jack_
 TOL_GROUP <- c(fir = "tolerant", black_spruce = "tolerant", white_spruce = "tolerant", jack_pine = "intolerant", cedar = "intermediate",
                sugar_maple = "tolerant", red_maple = "intermediate", yellow_birch = "intermediate", white_birch = "intolerant",
                trembling_aspen = "intolerant", other_pioneer = "intolerant", other_temperate = NA_character_, regen = "regen")
+#
+# Shade-tolerance scores (Niinemets & Valladares 2006, Appendix A; vector copied here unchanged from R/25_I_common.R (TOL), 2026-11-17).
+# other_pioneer 1.18 = plot-frequency weighted mean of its member species (I16). other_temperate and regen: NA (no score).
+TOL_SCORE <- c(fir = 5.01, black_spruce = 4.08, white_spruce = 4.15, jack_pine = 1.36, cedar = 3.45, sugar_maple = 4.76, red_maple = 3.44,
+               yellow_birch = 3.17, white_birch = 1.54, trembling_aspen = 1.21, other_pioneer = 1.18, other_temperate = NA, regen = NA)

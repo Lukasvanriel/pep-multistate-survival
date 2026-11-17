@@ -37,7 +37,7 @@ Notation: h_ij(t | x) = hazard from state i to j at time in state t with covaria
 | Section | Quantities |
 |---|---|
 | Data | record contents; observed change between visits; disturbance regime; raw rates over calendar time; climate trend over the record (new) |
-| Model assumptions | fit validity; Weibull shape; proportional hazards; imputation; observed vs predicted; stated untestable assumptions; model comparison by covariate group (new); choice of clock (new) |
+| Model assumptions | fit validity; Weibull shape; proportional hazards; imputation; observed vs predicted; stated untestable assumptions; choice of clock (new) |
 | Step 1: hazard | baseline rate; ratio of reciprocal baseline rates (new); α and test of α = 1; GDD, CMI, soil effects; do effects differ between transitions (new); disturbance effects and decay with TSD; GDD × disturbance; α vs TSD in regen exits; previous-state check (new) |
 | Step 2: one stay | persistence at 10/25/50 y; mean time in state; chance of leaving to each destination; destination shares; entropy of destinations; pace vs direction split; each driver's effect on these; interaction on this scale |
 | Step 3: several changes | composition at 10/25/50 y; composition after a disturbance event; first passage into a group; pathway probabilities (new); balance point along GDD; number of moves and returns; tolerance shift of moves |
@@ -52,11 +52,11 @@ Notation: h_ij(t | x) = hazard from state i to j at time in state t with covaria
 
 | Quantity | Theory | Question | Source | Status |
 |---|---|---|---|---|
-| Plots, intervals, events per transition | interval-censored observation of a multistate process | What does the record contain? | both | |
-| Observed change between visits (thermal index, shade tolerance) | empirical counterpart of the occupancy P(t) over one interval | What did the forest actually do? | — | |
-| Disturbance frequency, co-occurrence, climate position | distribution of the time-varying covariates | What disturbance regime is behind the data? | Brice 2.3 | |
-| Raw transition rates over calendar time | crude hazard estimate (events / time at risk; constant-hazard estimator) | Is the process time-homogeneous over the record? | — | |
-| Climate trend in the plots over the record (new) | observed covariate path within plots | How much did climate change during the record? | Brice 2.3 | |
+| Plots, intervals, events per transition | interval-censored observation of a multistate process | What does the record contain? | both | done 17 Nov: `R/analysis/0_01_record_contents.R` -> `data-output/final/analysis/0_data/0_01_*` |
+| Observed change between visits (thermal index, shade tolerance) | empirical counterpart of the occupancy P(t) over one interval | What did the forest actually do? | — | done 17 Nov: `R/analysis/0_02_observed_change.R` -> `data-output/final/analysis/0_data/0_02_*` |
+| Disturbance frequency, co-occurrence, climate position | distribution of the time-varying covariates | What disturbance regime is behind the data? | Brice 2.3 | done 17 Nov: `R/analysis/0_03_disturbance_regime.R` -> `data-output/final/analysis/0_data/0_03_*` |
+| Raw transition rates over calendar time | crude hazard estimate (events / time at risk; constant-hazard estimator) | Is the process time-homogeneous over the record? | — | done 17 Nov: `R/analysis/0_04_transition_rates.R` -> `data-output/final/analysis/0_data/0_04_*` |
+| Climate trend in the plots over the record (new) | observed covariate path within plots | How much did climate change during the record? | Brice 2.3 | done 17 Nov: `R/analysis/0_05_climate_trend.R` -> `data-output/final/analysis/0_data/0_05_*` |
 
 ## Model assumptions
 
@@ -67,7 +67,6 @@ Notation: h_ij(t | x) = hazard from state i to j at time in state t with covaria
 | Covariate effects over time in state | proportional hazards: a covariate multiplies h by a constant factor | Do effects stay constant over time in state? | Putter 4.4 | |
 | Imputation diagnostics | multiple imputation of interval-censored change times; Rubin pooling | Is imputing change times valid? | — | |
 | Observed vs predicted transitions | goodness of fit (Putter: model-predicted vs non-parametric cumulative incidence) | Does the model reproduce the data? | Putter 3.3 | |
-| Model comparison by covariate group (new) | nested-model comparison (Brice: likelihood ratio and AIC; with INLA: WAIC or LOO) for baseline, climate, soil/CMI, disturbance, full | Does each covariate group improve the model? | Brice 2.4.2 | |
 | Choice of clock (new) | clock reset (time in state) vs clock forward (time since an origin); TSD is the model's second clock | Why time in state is the right clock | Putter 4.2, 4.4 | |
 | Stated, not testable | competing exits independent given covariates; censoring non-informative | — | Putter 2, 3.2 | |
 
@@ -156,6 +155,7 @@ Notation: h_ij(t | x) = hazard from state i to j at time in state t with covaria
 | Previous state as covariate; states split by history | Putter 4.2 | require refits with a new state set; out of scope for this chapter (the predicted-vs-observed check stays) |
 | Disturbance held permanently "on" as a scenario | Brice 2.4.4 | Markov-specific; we use recurring regimes with fading effects instead (state the difference in the methods: long-run numbers are not directly comparable) |
 | 100-year horizon | — | extrapolation; adds nothing beyond the steady state and convergence time |
+| Model comparison by covariate group (likelihood ratio / AIC; with INLA: WAIC or LOO) | Brice 2.4.2 | the covariate set was fixed a priori from ecological hypotheses; testing covariate groups afterwards would be data-driven selection, which was never intended. Driver importance is shown by effect sizes (step 1) and the driver comparison (step 2). State the difference from Brice in the methods (user, 17 Nov) |
 
 # Next steps
 
