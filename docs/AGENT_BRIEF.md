@@ -49,7 +49,7 @@ You are helping Lukas (PhD, Université de Montréal) carry out the analysis pla
 - New outputs: `data-output/final/analysis/<section folder>/` (0_data, 1_assumptions, 2_hazard, 3_one_stay, 4_process, 5_long_run, 6_space_for_time, 7_robustness).
 - Shared code (draws, hazard, competing-risks, simulation, steady state): one engine file in `R/analysis/`, grown as needed. Borrow code from old scripts after checking it; copy it in properly.
 - NEVER run parts of another script by line number (`eval(parse(text = src[a:b]))`); this broke silently once already.
-- Before editing any existing file, copy it to `_to_delete/` next to it with a dated name. Deleting files needs Lukas's permission.
+- Before editing an existing file, make sure its current version is committed (`git status` shows it unchanged; if it has uncommitted changes, commit them first). Files tracked in git need no extra copy; only an untracked file gets a dated copy in `_to_delete/` next to it. Deleting files needs Lukas's permission.
 
 ## 7. Per-row routine
 1. Read the row (quantity, theory, question, conventions that apply).
@@ -85,5 +85,5 @@ You are helping Lukas (PhD, Université de Montréal) carry out the analysis pla
   `git -c user.name="Lukas Van Riel" -c user.email="17409050+Lukasvanriel@users.noreply.github.com" commit ...`
   and end the message with the co-author line `Co-Authored-By: Claude <noreply@anthropic.com>`.
 - Pushing does not work from the VM; Lukas pushes from his Mac.
-- One commit per finished plan section, plus one before changing any existing file.
+- One commit per finished plan section (plus the rule in §6 for editing existing files).
 - Ask Lukas to allow deletion first (git needs to delete its lock files), via the delete-permission tool for the project folder.
