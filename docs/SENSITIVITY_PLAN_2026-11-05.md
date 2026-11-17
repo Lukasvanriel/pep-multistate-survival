@@ -54,6 +54,13 @@ Status: **proposal for later review. Nothing here is decided or implemented** un
 | S23 | Event limit 10 instead of 15 (+17 transitions) | full run | Added transitions are sparse and likely to fail to converge often |
 | S26 (new) | Cap-free MAP (fit_map_v0) pooled over all imputations, for the X->regen transitions | ready (`R/tests/24_map_selection_regen.R`) | Already computed for black_spruce, fir, jack_pine and trembling_aspen->regen (log `data-output/diagnostics/24_map_selection.log`); a supplement table if wanted |
 
+## Added 2026-11-11 (tier not yet set)
+
+| S | What | Type | Note |
+|---|---|---|---|
+| S27 (new) | Group-level states: the 13 states merged into boreal, pioneer, temperate, regen | full run (from 02) | Sensitivity only; the 13-state model stays the main analysis. Checks whether the headlines hold at group level: memory (alpha) by class, pace vs direction (D3), the antagonistic climate x disturbance interaction (A6C/B7), the hindcast (H/I9), the boreal-ward pull of harvest (I13). Group-level transitions have enough events to estimate fire and pest terms for every exit, and merging removes within-group flicker (rank swaps). Not a test of Brice et al. (2020)'s states, whose mixed class is defined by group shares (25-75% boreal BA). |
+| S28 (new, 2026-11-12) | Soil PC2 in place of soil PC1 | full run (refit) | Sensitivity only; the main model keeps soil PC1. Checks whether the soil axis chosen changes the climate and disturbance effects and the headlines. |
+
 ## Obsolete
 
 | S | Why |
