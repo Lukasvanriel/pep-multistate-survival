@@ -60,14 +60,20 @@ You are helping Lukas (PhD, Université de Montréal) carry out the analysis pla
 
 ## 8. Environment
 - The shell (`device_bash`) runs in a VM; the project is at `$HOME/mnt/pep-multistate-survival`. Each call is limited to 180 s; background processes are killed when the call ends, so long or resumable scripts are run in foreground chunks.
-- If `Rscript` is missing, install R via micromamba from conda-forge (CRAN is blocked):
+- **R is not part of the VM. Each conversation installs its own R and removes it again.** The VM's session disk (~9.8 GB) is shared by all conversations and nothing cleans it up, so an install left behind blocks every later conversation. R cannot be installed in the project folder (tested 17 Nov: the Mac file system breaks the install).
+- **Before installing:** check `df -h /sessions`. You need about 2 GB free. If there is less, stop and tell Lukas; do not try to free space outside your own session folder.
+- **Install** (into your own session folder, never the project folder), then clean the download cache straight away:
   ```
   mkdir -p $HOME/mm && cd $HOME/mm
-  curl -sL https://conda.anaconda.org/conda-forge/linux-aarch64/micromamba-2.9.0-0.tar.bz2 -o mm.tar.bz2 && tar -xjf mm.tar.bz2 bin/micromamba
-  ./bin/micromamba create -y -r $HOME/mm/root -n r -c conda-forge r-base=4.4 r-data.table r-ggplot2 r-here r-dbi r-rsqlite r-metafor r-scales r-patchwork r-nnet
+  curl -sL https://conda.anaconda.org/conda-forge/linux-aarch64/micromamba-2.9.0-0.tar.bz2 -o mm.tar.bz2 && tar -xjf mm.tar.bz2 bin/micromamba && rm mm.tar.bz2
+  export MAMBA_ROOT_PREFIX=$HOME/mm/root
+  ./bin/micromamba create -y -n r -c conda-forge r-base=4.4 r-data.table r-ggplot2 r-here r-dbi r-rsqlite r-metafor r-scales r-patchwork r-nnet
+  ./bin/micromamba clean -a -y
   # Rscript: $HOME/mm/root/envs/r/bin/Rscript ; run from the project root
   ```
-  (Check `uname -m` first; use linux-64 instead of linux-aarch64 on x86.)
+  (Check `uname -m` first; use linux-64 instead of linux-aarch64 on x86. The create step can take close to 180 s; if it times out, re-run it.)
+- **Remove R immediately after the section commit** (doer), or at the end of the check (checker): `rm -rf $HOME/mm`, then show `df -h /sessions`. Also remove anything else you created in your session folder (scratch files). Deleting needs Lukas's permission (delete-permission tool).
+- **Never two installs at the same time:** the doer removes R before the checker starts.
 
 ## 9. Known pitfalls
 - Caches: resumable scripts reuse caches; when an input changes, the cache can hold stale results (happened with `figures/E/cache/E1_E2_first_move.rds`). Check caches when inputs change.
