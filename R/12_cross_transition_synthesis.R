@@ -35,7 +35,10 @@
 #      Every fixed-time contrast is c times a constant, so the tests are the same for any window; D1 rows also carry the results scaled to the windows 1 vs 10 y, 10 vs 30 y,
 #      30 vs 60 y (est = c * (f(t2) - f(t1)), CI scaled the same way, ratio = exp).
 #   E  Weibull shape: log(alpha) (pooled on the log scale, 08), origins other than regen:
-#        E1 life history                           y ~ shade_tol(origin)      (prediction: negative slope; tolerant late-successional states ~ memoryless)
+#        E1 life history (user, 2026-11-09)        groups intolerant / intermediate / tolerant / regen (regen added 2026-11-09).
+#                                                  y ~ tol_group(origin) - 1 (group means) and y ~ tol_group (differences vs intolerant; QM = test of any
+#                                                  difference between groups). Prediction: alpha highest in intolerant (pioneer) states, near 1 in tolerant states.
+#                                                  Replaces y ~ shade_tol (continuous score); groups follow the three clusters of the verified scores below.
 #        E2 origin means incl. regen (descriptive) y ~ origin - 1   (random: destination, transition)
 #        "robust" subset for E = >= MIN_EVENTS_ALPHA events (the alpha prior dominates sparse transitions).
 # Cells with < MIN_CELL estimates are dropped before fitting. Sampling covariances between estimates of the same transition are ignored
@@ -52,14 +55,19 @@ MIN_EVENTS_ROBUST <- 25L; MIN_EVENTS_ALPHA <- 50L; MIN_CELL <- 3L; TAU_B <- c(1,
 source(here::here("R", "covariate_spec.R")); f_tsd <- tsd_fun(TSD_FORM)   # tsd_fun(): window constants f(t2) - f(t1)
 WINDOWS <- list(w1v10 = c(1, 10), w10v30 = c(10, 30), w30v60 = c(30, 60))
 
-# ---- state traits: VERIFY / EDIT before use -----------------------------------------------------------------------------------------------------------
-# shade_tol: Niinemets & Valladares (2006, Ecol. Monogr.) shade-tolerance scale 1 (intolerant) - 5 (very tolerant) of the dominant species.
-# Values below are from memory and MUST be checked against the paper's appendix. Composite states: NA (excluded from E1) unless you set a value.
+# ---- state traits ----------------------------------------------------------------------------------------------------------------------------------
+# shade_tol: Niinemets & Valladares (2006, Ecol. Monogr. 76:521-547), Appendix A (Ecological Archives M076-020-A1), scale 0 (no tolerance) - 5 (maximal),
+#   of the dominant species. All ten values checked against Appendix A on 2026-11-09 (exact match). Reference only; E1 uses tol_group.
+# tol_group (user, 2026-11-09): intolerant (scores 1.2-1.5; other_pioneer = aspens/poplars, larch, pin cherry: 0.98-1.27 in Appendix A),
+#   intermediate (3.2-3.5), tolerant (4.1-5.0). other_temperate (mixed: 1.89-4.83 across its species): NA, excluded from E1.
+#   regen: its own group (user, 2026-11-09); its alpha partly reflects recovery after disturbance (time in state ~ time since disturbance).
 traits <- data.table(
   state     = c("fir", "black_spruce", "white_spruce", "jack_pine", "cedar", "sugar_maple", "red_maple", "yellow_birch",
                 "white_birch", "trembling_aspen", "other_pioneer", "other_temperate", "regen"),
   shade_tol = c(5.01,  4.08,           4.15,           1.36,        3.45,    4.76,          3.44,        3.17,
-                1.54,          1.21,              NA,              NA,                NA))
+                1.54,          1.21,              1.18,            NA,                NA))   # other_pioneer 1.18 = plot-weighted mean of member species (as 25_I_common; user 2026-11-16)
+source(here::here("R", "00_groups.R"))   # TOL_GROUP: shade-tolerance groups
+traits[, tol_group := factor(unname(TOL_GROUP[state]), levels = c("intolerant", "intermediate", "tolerant", "regen"))]   # reference (first level) = intolerant
 
 # ---- inputs -------------------------------------------------------------------------------------------------------------------------------------------------
 iv <- readRDS(file.path(TABLE_DIR, "visit_intervals.rds")); setDT(iv)
@@ -93,7 +101,7 @@ tsd   <- hr[grepl("_tsd_coef$", contrast)]                                      
 pl <- fread(file.path(DIR, sprintf("pooled_%s_final.csv", RUN_TAG)))
 al <- pl[parameter == "alpha", .(label, log_hr = log_est, se = log_se, n_events = n_events_avg)]
 al[, c("from", "to") := tstrsplit(label, "->", fixed = TRUE)]
-al <- merge(al, traits[, .(from = state, shade_tol)], by = "from", all.x = TRUE)
+al <- merge(al, traits[, .(from = state, shade_tol, tol_group)], by = "from", all.x = TRUE)
 al[, robust := n_events >= MIN_EVENTS_ALPHA]
 
 fwrite(rbind(clim[, .(block = "A_climate", sub = cov, label, from, to, class, log_hr, se, n_events, robust, dIndex, Index_to)],
@@ -101,7 +109,7 @@ fwrite(rbind(clim[, .(block = "A_climate", sub = cov, label, from, to, class, lo
              inter[, .(block = "C_interaction", sub = dist, label, from, to, class, log_hr, se, n_events, robust, dIndex = dSTI, Index_to = STI_to)],
              tsd[,   .(block = "D_tsd", sub = dist, label, from, to, class, log_hr, se, n_events, robust, dIndex = dSTI, Index_to = STI_to)],
              al[,    .(block = "E_alpha", sub = "log_alpha", label, from, to, class = fifelse(from == "regen", "regen_exit", fifelse(to == "regen", "to_regen", "between")),
-                       log_hr, se, n_events, robust, dIndex = shade_tol, Index_to = NA_real_)], fill = TRUE),
+                       log_hr, se, n_events, robust, dIndex = shade_tol, Index_to = NA_real_, tol_group = as.character(tol_group))], fill = TRUE),
        file.path(DIR, sprintf("synthesis_inputs_%s.csv", RUN_TAG)))
 
 # ---- meta-analytic fit ---------------------------------------------------------------------------------------------------------------------------------
@@ -141,7 +149,8 @@ for (sb in c("all", "robust")) {
   d <- S(tsd)
   out[[length(out) + 1]] <- fit_mv(cells(d, d$dist, d$class), ~ cell - 1, "D1_tsd_cell_means", sb)
   d <- if (sb == "all") al else al[robust == TRUE]
-  out[[length(out) + 1]] <- fit_mv(d[from != "regen" & !is.na(shade_tol)], ~ shade_tol, "E1_logalpha_vs_shade_tol", sb)
+  out[[length(out) + 1]] <- fit_mv(d[!is.na(tol_group)], ~ tol_group - 1, "E1_logalpha_tolgroup_means", sb)
+  out[[length(out) + 1]] <- fit_mv(d[!is.na(tol_group)], ~ tol_group, "E1_logalpha_tolgroup_diff", sb)
   out[[length(out) + 1]] <- fit_mv(cells(d, d$from), ~ cell - 1, "E2_logalpha_origin_means", sb, random = c("to", "label"))
 }
 res <- rbindlist(out, fill = TRUE)
@@ -161,7 +170,9 @@ key <- function(mod, trm) { r <- res[model == mod & term == trm]; if (!nrow(r)) 
 key("A2_gdd_between_vs_dIndex", "dIndex"); key("A2_cmi_between_vs_dIndex", "dIndex"); key("A3_gdd_regenexit_vs_destIndex", "Index_to")
 for (tt in TAU_B) key(sprintf("B2_disturbance_between_vs_dSTI_tau%gy", tt), "dSTI")
 key("C1_interaction_overall", "intrcpt"); key("C4_interaction_between_vs_dSTI", "dSTI")
-key("E1_logalpha_vs_shade_tol", "shade_tol")
+for (g in c("tol_groupintermediate", "tol_grouptolerant", "tol_groupregen")) key("E1_logalpha_tolgroup_diff", g)
+cat("\nE1 alpha by tolerance group (group means, alpha = exp(est); QMp of _diff = test of any difference between groups):\n")
+print(res[grepl("^E1_", model), .(model, subset, term, k, alpha_or_ratio = round(ratio, 2), lo = round(ratio_lo, 2), hi = round(ratio_hi, 2), p = signif(p, 2), QMp = signif(QMp, 2))])
 cat("\nD1 cell means scaled to windows (log HR change between the two times; ratio = exp):\n")
 print(res[grepl("^D1_", model) & !is.na(est), .(subset, term, k, c_coef = round(est, 3), p = signif(p, 2), w1v10 = round(w1v10_ratio, 2), w10v30 = round(w10v30_ratio, 2), w30v60 = round(w30v60_ratio, 2))], nrows = 100)
 # D5 check: every block has k > 0 (number of estimates entering, all / robust subset)
