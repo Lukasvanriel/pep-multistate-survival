@@ -81,5 +81,9 @@ You are helping Lukas (PhD, Université de Montréal) carry out the analysis pla
 - Old scripts used fixed z = 0 scenarios and a 100-y horizon; these do not match the frozen conventions.
 
 ## 10. Commits
+- Author every commit as Lukas, with Claude as co-author. The VM has no git identity, so pass it on the command line (do not change any git config):
+  `git -c user.name="Lukas Van Riel" -c user.email="17409050+Lukasvanriel@users.noreply.github.com" commit ...`
+  and end the message with the co-author line `Co-Authored-By: Claude <noreply@anthropic.com>`.
+- Pushing does not work from the VM; Lukas pushes from his Mac.
 - One commit per finished plan section, plus one before changing any existing file.
 - Ask Lukas to allow deletion first (git needs to delete its lock files), via the delete-permission tool for the project folder.
