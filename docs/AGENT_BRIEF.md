@@ -45,6 +45,7 @@ You are helping Lukas (PhD, Université de Montréal) carry out the analysis pla
 ## 6. Folder rules
 - Old `R/` scripts and `data-output/final/` (outside `analysis/`) are READ-ONLY references.
 - New scripts: `R/analysis/`, named `<section>_<nn>_<short_name>.R` (e.g. `2_01_baseline_rates.R`).
+- One script per plan row (nn = the row's number within its section, e.g. `0_01_record_contents.R`). Where rows share a calculation, the shared part goes in the engine file and each row's script only calls it and computes its own quantity. Never merge rows into one script.
 - New outputs: `data-output/final/analysis/<section folder>/` (0_data, 1_assumptions, 2_hazard, 3_one_stay, 4_process, 5_long_run, 6_space_for_time, 7_robustness).
 - Shared code (draws, hazard, competing-risks, simulation, steady state): one engine file in `R/analysis/`, grown as needed. Borrow code from old scripts after checking it; copy it in properly.
 - NEVER run parts of another script by line number (`eval(parse(text = src[a:b]))`); this broke silently once already.
@@ -53,8 +54,9 @@ You are helping Lukas (PhD, Université de Montréal) carry out the analysis pla
 ## 7. Per-row routine
 1. Read the row (quantity, theory, question, conventions that apply).
 2. Look for an old script/output that computes it; check it against the row's theory and the conventions. Report: correct / partly / wrong / absent, and why.
-3. Ask Lukas for the row's open choices (grouping, climate values, real plots vs scenario stand) with an very concise example. Then, with permission: reuse or write the code, run it into the new folder.
-4. Fill the row's Status in the plan (output path) and add a log entry (format in the log file).
+3. Explain concisely what that row is about
+4. Ask Lukas for the row's open choices (grouping, climate values, real plots vs scenario stand) with an very concise example. Then, with permission: reuse or write the code, run it into the new folder.
+5. Fill the row's Status in the plan (output path) and add a log entry (format in the log file).
 
 ## 8. Environment
 - The shell (`device_bash`) runs in a VM; the project is at `$HOME/mnt/pep-multistate-survival`. Each call is limited to 180 s; background processes are killed when the call ends, so long or resumable scripts are run in foreground chunks.
